@@ -1,0 +1,14 @@
+# Sécurité : ne jamais uploader les clés
+credentials/
+*.json
+
+# Notebooks et caches
+.ipynb_checkpoints/
+**/cache/
+__pycache__/
+
+# Données volumineuses (optionnel mais conseillé)
+**/results_connectivity/
+*.tif
+*.geojson
+*.gpkg
