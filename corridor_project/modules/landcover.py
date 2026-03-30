@@ -1,9 +1,88 @@
+import sys
 import numpy as np
 import xarray as xr
 import geopandas as gpd
+import ee
+import osmnx as ox
 import pandas as pd
 from rasterio import features
 from typing import Dict, Any, Optional
+sys.path.insert(1, '../../Hugo/a_b_c_functions/gee_with_python/')
+from utils_gee import prepare_ds_xarray_ee
+
+def get_city_landcover(
+    aoi_ee: ee.Geometry, 
+    aoi_raw: gpd.GeoDataFrame
+) -> xr.DataArray:
+    """
+    Génère une carte d'occupation du sol fusionnant ESA WorldCover et OSM Highways.
+    
+    Args:
+        aoi_ee (`ee.Geometry`): Emprise pour l'extraction Google Earth Engine.
+        aoi_raw (`gpd.GeoDataFrame`): Polygone de la zone (utilisé pour l'EPSG et OSMnx).
+        
+    Returns:
+        `xr.DataArray`: Raster fusionné projeté en UTM local.
+    """
+
+    # --- 0. Détermination de la projection locale ---
+    # On utilise estimate_utm_crs() pour automatiser le choix de l'EPSG
+    local_utm_crs = aoi_raw.estimate_utm_crs()
+    utm_epsg: str = str(local_utm_crs)
+    aoi_utm = aoi_raw.to_crs(utm_epsg)
+    
+    # --- 1. Extraction WorldCover ---
+    wc_img: ee.Image = ee.ImageCollection('ESA/WorldCover/v200').mosaic()
+    
+    # Utilisation de la fonction de Hugo
+    wc_xr: xr.Dataset = prepare_ds_xarray_ee(
+        wc_img, 
+        scale=10, 
+        geometry=aoi_ee, 
+        crs=utm_epsg
+    ).compute()
+    
+    wc_data: xr.DataArray = wc_xr['Map'].squeeze()
+    wc_data.rio.write_crs(utm_epsg, inplace=True)
+    wc_data = wc_data.rio.clip(aoi_utm.geometry, aoi_utm.crs, all_touched=True, drop=True)
+
+    # --- 2. Traitement Highways OSM ---
+    # On utilise l'union_all() de aoi_raw pour OSMnx
+    highways: gpd.GeoDataFrame = ox.features_from_polygon(
+        aoi_raw.geometry.union_all(), 
+        tags={"highway": True}
+    )
+    
+    # Filtrage et reprojection en mètres (UTM) pour les buffers
+    highways = highways[highways.geometry.type.isin(['LineString', 'MultiLineString'])].to_crs(utm_epsg)
+    
+    widths: Dict[str, int] = {
+        'motorway': 20, 
+        'trunk': 18, 
+        'primary': 15, 
+        'secondary': 12, 
+        'tertiary': 10, 
+        'residential': 8
+    }
+    
+    # Calcul des emprises au sol
+    highways['width'] = highways['highway'].apply(lambda x: widths.get(x, 4))
+    highways['geometry'] = highways.geometry.buffer(highways['width'] / 2)
+    
+    # Préparation pour la rasterisation (code 51)
+    highways_final = highways[['geometry']].copy()
+    highways_final['wc_code'] = 51
+
+    # --- 3. Fusion Landcover ---
+    # Rasterisation des routes sur la grille WorldCover
+    # On appelle rasterize_osm (qui doit être dans ton module lc)
+    da_osm_raster: xr.DataArray = rasterize_osm(wc_data, highways_final)
+    
+    # Fusion finale : priorité aux routes (51)
+    da_lc: xr.DataArray = xr.where(da_osm_raster == 51, 51, wc_data)
+    da_lc.rio.write_crs(utm_epsg, inplace=True)
+    
+    return da_lc
 
 def get_common_legend() -> Dict[int, str]:
     """
