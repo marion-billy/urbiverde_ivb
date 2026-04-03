@@ -3,38 +3,54 @@ import numpy as np
 import xarray as xr
 import geopandas as gpd
 import ee
+import geemap
 import osmnx as ox
 import pandas as pd
 from rasterio import features
 from typing import Dict, Any, Optional
 sys.path.insert(1, '../../Hugo/a_b_c_functions/gee_with_python/')
 from utils_gee import prepare_ds_xarray_ee
+sys.path.insert(1, '../../Hugo/a_b_c_functions/spatial_analysis/')
+from utils_proj import get_utm_epsg
+from utils_vector import gdf_to_bbox
 
+def setup_aoi(aoi_raw: gpd.GeoDataFrame) -> tuple[gpd.GeoDataFrame, ee.Geometry, str]:
+    """
+    Prépare tous les formats d'AOI nécessaires à partir du GeoDataFrame brut.
+
+    Args:
+        aoi_raw (`gpd.GeoDataFrame`): Polygone de la zone d'étude en coordonnées géographiques).
+
+    Returns:
+        `tuple`: Contenant l'AOI projeté (`gpd.GeoDataFrame`), l'AOI Earth Engine (`ee.Geometry`) et l'EPSG (`str`).
+    """
+    utm_epsg = f"EPSG:{get_utm_epsg(gdf=aoi_raw)}"
+    aoi_utm = aoi_raw.to_crs(utm_epsg)
+    aoi_ee = geemap.gdf_to_ee(gdf_to_bbox(aoi_utm))
+    
+    return aoi_utm, aoi_ee, utm_epsg
+    
 def get_city_landcover(
     aoi_ee: ee.Geometry, 
-    aoi_raw: gpd.GeoDataFrame
+    aoi_utm: gpd.GeoDataFrame,
+    aoi_raw: gpd.GeoDataFrame,
+    utm_epsg: str
 ) -> xr.DataArray:
     """
     Génère une carte d'occupation du sol fusionnant ESA WorldCover et OSM Highways.
     
     Args:
         aoi_ee (`ee.Geometry`): Emprise pour l'extraction Google Earth Engine.
-        aoi_raw (`gpd.GeoDataFrame`): Polygone de la zone (utilisé pour l'EPSG et OSMnx).
+        aoi_utm (`gpd.GeoDataFrame`): Polygone de la zone projeté en UTM (utilisé pour le clip).
+        aoi_raw (`gpd.GeoDataFrame`): Polygone source (utilisé pour son CRS natif lors de la requête OSMnx).
+        utm_epsg (`str`): Code de projection locale pour les calculs de distance et la rasterisation.
         
     Returns:
         `xr.DataArray`: Raster fusionné projeté en UTM local.
     """
-
-    # --- 0. Détermination de la projection locale ---
-    # On utilise estimate_utm_crs() pour automatiser le choix de l'EPSG
-    local_utm_crs = aoi_raw.estimate_utm_crs()
-    utm_epsg: str = str(local_utm_crs)
-    aoi_utm = aoi_raw.to_crs(utm_epsg)
-    
     # --- 1. Extraction WorldCover ---
     wc_img: ee.Image = ee.ImageCollection('ESA/WorldCover/v200').mosaic()
     
-    # Utilisation de la fonction de Hugo
     wc_xr: xr.Dataset = prepare_ds_xarray_ee(
         wc_img, 
         scale=10, 
@@ -47,7 +63,6 @@ def get_city_landcover(
     wc_data = wc_data.rio.clip(aoi_utm.geometry, aoi_utm.crs, all_touched=True, drop=True)
 
     # --- 2. Traitement Highways OSM ---
-    # On utilise l'union_all() de aoi_raw pour OSMnx
     highways: gpd.GeoDataFrame = ox.features_from_polygon(
         aoi_raw.geometry.union_all(), 
         tags={"highway": True}
@@ -57,50 +72,63 @@ def get_city_landcover(
     highways = highways[highways.geometry.type.isin(['LineString', 'MultiLineString'])].to_crs(utm_epsg)
     
     widths: Dict[str, int] = {
-        'motorway': 20, 
-        'trunk': 18, 
-        'primary': 15, 
-        'secondary': 12, 
+        'motorway': 30, 
+        'trunk': 20, 
+        'primary': 20, 
+        'secondary': 15, 
         'tertiary': 10, 
-        'residential': 8
+        'unclassified': 10,
+        'residential': 10,
     }
     
     # Calcul des emprises au sol
-    highways['width'] = highways['highway'].apply(lambda x: widths.get(x, 4))
+    highways['width'] = highways['highway'].apply(lambda x: widths.get(x, 5))
     highways['geometry'] = highways.geometry.buffer(highways['width'] / 2)
     
-    # Préparation pour la rasterisation (code 51)
-    highways_final = highways[['geometry']].copy()
-    highways_final['wc_code'] = 51
+    # Préparation pour la rasterisation (code 51 et 52)
+    major_roads = ['motorway', 'trunk', 'primary']
+    highways['wc_code'] = np.where(highways['highway'].isin(major_roads), 51, 52)
 
     # --- 3. Fusion Landcover ---
     # Rasterisation des routes sur la grille WorldCover
-    # On appelle rasterize_osm (qui doit être dans ton module lc)
-    da_osm_raster: xr.DataArray = rasterize_osm(wc_data, highways_final)
+    da_osm_raster = rasterize_osm(wc_data, highways)
     
-    # Fusion finale : priorité aux routes (51)
-    da_lc: xr.DataArray = xr.where(da_osm_raster == 51, 51, wc_data)
+    # Fusion : On injecte les routes OSM (51 et 52) par-dessus WorldCover
+    da_lc = xr.where(da_osm_raster > 0, da_osm_raster, wc_data)
     da_lc.rio.write_crs(utm_epsg, inplace=True)
     
     return da_lc
 
-def get_common_legend() -> Dict[int, str]:
+def rasterize_osm(wc_da: xr.DataArray, osm_gdf: gpd.GeoDataFrame) -> xr.DataArray:
     """
-    Returns a standardized nomenclature to compare WorldCover and CosIA.
-    Focuses on functional mobility classes for ecological connectivity.
+    Creates a raster containing OSM Highways.
+
+    Args:
+        wc_da (xr.DataArray): Template for spatial alignment.
+        osm_gdf (gpd.GeoDataFrame): Road network vectors.
 
     Returns:
-        Dict[int, str]: Mapping of common landcover codes to class names.
+        xr.DataArray: Rasterized roads with code 51 or 52.
     """
-    return {
-        10: "Trees",
-        30: "Grassland/Shrub",
-        40: "Agriculture",
-        50: "Built-up",
-        51: "Highways",  # OSM
-        60: "Bare soil/Impervious",  # Open/Ground-level surfaces
-        80: "Water"
-    }
+    shapes = [(geom, value) for geom, value in zip(osm_gdf.geometry, osm_gdf['wc_code'])]
+    rasterized = features.rasterize(
+        shapes=shapes,
+        out_shape=wc_da.shape,
+        transform=wc_da.rio.transform(),
+        fill=0,
+        dtype='uint8',
+    )
+    return xr.DataArray(
+        rasterized, 
+        coords=wc_da.coords, 
+        dims=wc_da.dims
+    ).rio.write_crs(wc_da.rio.crs)
+    
+#######################################
+#######################################
+## RESEARCH AND LANDCOVER COMPARISON ##
+#######################################
+#######################################
 
 def get_cosia_mapping() -> Dict[str, int]:
     """
@@ -124,7 +152,7 @@ def get_cosia_mapping() -> Dict[str, int]:
         # --- Vegetation ---
         'Conifère': 10,           
         'Feuillu': 10,            
-        'Broussaille': 30,        # Shrublands (20) not available
+        'Broussaille': 30,        # Shrublands (20) not available, a perpi si!
         'Pelouse': 30,            
         
         # --- Agriculture ---
@@ -134,9 +162,32 @@ def get_cosia_mapping() -> Dict[str, int]:
         
         # --- Water ---
         'Surface eau': 80,        
-        'Piscine': 80,            
+        'Piscine': 80,
+
+        # --- Wetlands 90 ---
     }
 
+def get_common_legend() -> Dict[int, str]:
+    """
+    Returns a standardized nomenclature to compare WorldCover and CosIA.
+    Focuses on functional mobility classes for ecological connectivity.
+
+    Returns:
+        Dict[int, str]: Mapping of common landcover codes to class names.
+    """
+    return {
+        10: "Trees",
+        20: "Shrubland",
+        30: "Grassland",
+        40: "Agriculture",
+        50: "Built-up",
+        51: "Major roads",  # OSM
+        52: "Minor roads",  # OSM
+        60: "Bare soil/Impervious",  # Open/Ground-level surfaces
+        80: "Water",
+        90: "Wetlands",  # keep?
+    }
+    
 def get_layer_priorities() -> Dict[int, int]:
     """
     Defines the stacking order for rasterization. 
@@ -148,11 +199,14 @@ def get_layer_priorities() -> Dict[int, int]:
     return {
         60: 1, # Bare soil
         40: 2, # Cropland
+        20: 3, # Shrubland
         30: 3, # Grassland
         10: 4, # Trees
-        80: 5, # Water
-        50: 6, # Built-up
-        51: 7  # Highways
+        90: 5, # Wetlands to keep?
+        80: 6, # Water
+        50: 7, # Built-up
+        52: 8, # Highways
+        51: 9, # Highways
     }
     
 def rasterize_cosia(wc_da: xr.DataArray, cosia_gdf: gpd.GeoDataFrame) -> xr.DataArray:
@@ -196,32 +250,6 @@ def rasterize_cosia(wc_da: xr.DataArray, cosia_gdf: gpd.GeoDataFrame) -> xr.Data
         coords=wc_da.coords, 
         dims=wc_da.dims, 
         name="cosia_only"
-    ).rio.write_crs(wc_da.rio.crs)
-
-def rasterize_osm(wc_da: xr.DataArray, osm_gdf: gpd.GeoDataFrame) -> xr.DataArray:
-    """
-    Creates a raster containing OSM Highways.
-
-    Args:
-        wc_da (xr.DataArray): Template for spatial alignment.
-        osm_gdf (gpd.GeoDataFrame): Road network vectors.
-
-    Returns:
-        xr.DataArray: Rasterized roads with code 51.
-    """
-    shapes = [(geom, 51) for geom in osm_gdf.geometry]
-    rasterized = features.rasterize(
-        shapes=shapes,
-        out_shape=wc_da.shape,
-        transform=wc_da.rio.transform(),
-        fill=0,
-        dtype='uint8'
-    )
-    return xr.DataArray(
-        rasterized, 
-        coords=wc_da.coords, 
-        dims=wc_da.dims, 
-        name="osm_only"
     ).rio.write_crs(wc_da.rio.crs)
 
 def compute_landcover_stats(

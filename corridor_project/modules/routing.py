@@ -35,7 +35,7 @@ def create_resistance_surface(
     cost_matrix[np.isnan(raster_da.values) | (raster_da.values == 0)] = default_cost
     
     return cost_matrix
-
+    
 def compute_lcp_network(
     corridors_gdf: gpd.GeoDataFrame, 
     nodes_df: pd.DataFrame, 
@@ -43,10 +43,10 @@ def compute_lcp_network(
     friction_dict: Dict[int, float]
 ) -> gpd.GeoDataFrame:
     """
-    Computes the Least Cost Path (LCP) for a set of priority corridors.
+    Computes the Least Cost Path (LCP).
 
     Args:
-        corridors_gdf (gpd.GeoDataFrame): Priority corridors (theoretical straight lines).
+        corridors_gdf (gpd.GeoDataFrame): Corridors (theoretical straight lines).
         nodes_df (pd.DataFrame): Patch centroids with 'x' and 'y' coordinates.
         raster_da (xr.DataArray): Georeferenced landcover grid used as a friction base.
         friction_dict (Dict[int, float]): Mapping of landcover codes to travel costs.
@@ -64,12 +64,11 @@ def compute_lcp_network(
     
     lcp_results = []
 
-    # Iteration over priority corridors
     for _, row in tqdm(corridors_gdf.iterrows(), total=len(corridors_gdf), desc="Tracing LCPs"):
         u, v = int(row['node_1']), int(row['node_2'])
 
         try:
-            # Get centroids from nodes_df
+            # Get representative points from nodes_df
             p1_utm = (nodes_df.loc[u, 'x'], nodes_df.loc[u, 'y'])
             p2_utm = (nodes_df.loc[v, 'x'], nodes_df.loc[v, 'y'])
    
@@ -94,16 +93,19 @@ def compute_lcp_network(
             lcp_results.append({
                 'node_1': u,
                 'node_2': v,
-                'importance_score': row['importance_score'],
                 'theoretical_dist': row['dist_m'],
                 'real_dist': path_geom.length,
                 'geometry': path_geom
             })
             
         except Exception:
-            # Safety if points fall outside the raster bounds
+            print(f"Erreur critique sur le lien {u}-{v} : {type(e).__name__} - {e}")
+            if 'error_count' not in locals(): error_count = 0
+            error_count += 1
+            if error_count > 3:
+                raise e # Force l'arrêt pour lire le traceback complet
             continue
-
+            
     return gpd.GeoDataFrame(lcp_results, crs=raster_da.rio.crs)
 
 def calculate_tortuosity(lcp_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
