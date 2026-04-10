@@ -6,14 +6,17 @@ import geopandas as gpd
 from scipy import ndimage
 from tqdm import tqdm
 from rasterio import features
+from rasterio.enums import MergeAlg
 from shapely.geometry import shape
 from affine import Affine
+import matplotlib.pyplot as plt
 import networkx as nx
 from sklearn.neighbors import BallTree
 from shapely.geometry import LineString, Point
 from typing import Optional, Union, Any, List, Union, Tuple
 sys.path.insert(1, '../../Hugo/a_b_c_functions/spatial_analysis/')
 from utils_raster import raster_to_polygon
+from utils_raster import create_img_reference
 
 #######################################
 ################ MSPA #################
@@ -56,12 +59,16 @@ def fast_mspa(da_binary: xr.DataArray, edge_width_pixels: int = 1) -> Tuple[xr.D
     labels_with_core = np.unique(labels[core_arr > 0])
     is_core_patch = np.isin(labels, labels_with_core)
     islet_arr = (labels > 0) & (~is_core_patch)
+
+    # Lisière
+    edge_arr = (is_core_patch) & (core_arr == 0)
     
     # --- C. On ré-emballe dans des DataArrays (on copie les coordonnées de l'entrée) ---
     da_core = da_binary.copy(data=core_arr.astype('uint8'))
     da_islet = da_binary.copy(data=islet_arr.astype('uint8'))
+    da_edge = da_binary.copy(data=edge_arr.astype('uint8'))
     
-    return da_core, da_islet
+    return da_core, da_islet, da_edge
 
 def get_connectivity_elements(
     da_binary: xr.DataArray, 
@@ -70,39 +77,50 @@ def get_connectivity_elements(
 ) -> Tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     """
     Identifie et classe les éléments de connectivité (Noyaux et Stepping Stones).
+    Un Noyau est un patch dont le COEUR fait >= core_min_ha, mais la géométrie renvoyée inclut la lisière (Edge).
     Les Cores trop petits pour être des Noyaux sont déclassés en Stepping Stones.
     """
     
     # 1. Calcul MSPA
-    da_core, da_islet = fast_mspa(da_binary, edge_width_pixels=1)
+    da_core, da_islet, da_edge = fast_mspa(da_binary, edge_width_pixels=1)
     
     # 2. Vectorisation des Cores
-    gdf_cores_all = raster_to_polygon(da_core, data_type='uint8')
-    gdf_cores_all = gdf_cores_all[gdf_cores_all['value'] == 1].copy()
-    gdf_cores_all['area_ha'] = gdf_cores_all.geometry.area / 10000
+    gdf_pure_cores = raster_to_polygon(da_core, data_type='uint8')
+    gdf_pure_cores = gdf_pure_cores[gdf_pure_cores['value'] == 1].copy()
+    gdf_pure_cores['core_area_ha'] = gdf_pure_cores.geometry.area / 10000
+    
+    da_full_patches = da_binary.where(da_islet == 0, 0)
+    gdf_full_patches = raster_to_polygon(da_full_patches, data_type='uint8')
+    gdf_full_patches = gdf_full_patches[gdf_full_patches['value'] == 1].copy()
+    gdf_full_patches['total_area_ha'] = gdf_full_patches.geometry.area / 10000
+
+    joined = gpd.sjoin(gdf_full_patches, gdf_pure_cores, how='left', predicate='contains')
+    patch_core_max = joined.groupby(joined.index)['core_area_ha'].max()
+    gdf_full_patches['max_core_ha'] = patch_core_max.fillna(0)
     
     # 3. Séparation des Cores selon le seuil de surface
-    gdf_cores_final = gdf_cores_all[gdf_cores_all['area_ha'] >= core_min_ha].copy()
+    mask_noyau = gdf_full_patches['max_core_ha'] >= core_min_ha
+    gdf_cores_final = gdf_full_patches[mask_noyau].copy()
     gdf_cores_final['class'] = "Core (Noyau)"
     # Les Cores déclassés
-    gdf_cores_small = gdf_cores_all[
-        (gdf_cores_all['area_ha'] < core_min_ha) & 
-        (gdf_cores_all['area_ha'] >= islet_min_ha)
+    gdf_small_cores = gdf_full_patches[
+        (~mask_noyau) & (gdf_full_patches['total_area_ha'] >= islet_min_ha)
     ].copy()
-    gdf_cores_small['class'] = "Stepping Stone (Small Core)"
+    gdf_small_cores['class'] = "Stepping Stone (Small Core)"
 
     # 4. Extraction des Islets (sans core)
-    gdf_islets_raw = raster_to_polygon(da_islet, data_type='uint8')
-    gdf_islets_raw = gdf_islets_raw[gdf_islets_raw['value'] == 1].copy()
-    gdf_islets_raw['area_ha'] = gdf_islets_raw.geometry.area / 10000
+    gdf_islets = raster_to_polygon(da_islet, data_type='uint8')
+    gdf_islets = gdf_islets[gdf_islets['value'] == 1].copy()
+    gdf_islets['total_area_ha'] = gdf_islets.geometry.area / 10000
     # Filtre de surface pour les Islets
-    gdf_islets_raw = gdf_islets_raw[gdf_islets_raw['area_ha'] >= islet_min_ha].copy()
-    gdf_islets_raw['class'] = "Stepping Stone (Islet)"
+    gdf_islets = gdf_islets[gdf_islets['total_area_ha'] >= islet_min_ha].copy()
+    gdf_islets['class'] = "Stepping Stone (Islet)"
 
     # 5. Fusion pour créer la couche finale des Stepping Stones
-    gdf_stepping_stones = pd.concat([gdf_islets_raw, gdf_cores_small], ignore_index=True)
+    gdf_stepping_stones = pd.concat([gdf_islets, gdf_small_cores], ignore_index=True)
 
-    return gdf_cores_final, gdf_stepping_stones
+    cols = ['geometry', 'total_area_ha', 'max_core_ha', 'class']
+    return gdf_cores_final[cols], gdf_stepping_stones[cols]
     
 #######################################
 ############ GRAPH THEORY #############
@@ -147,7 +165,7 @@ def build_connectivity_graph_knn(nodes_df: pd.DataFrame, species_params: dict[st
     # Squelette du graph
     G = nx.Graph()
     for i, row in nodes_df.iterrows():
-        G.add_node(i, area=row['area_ha'], type=row['node_type'], pos=(row['x'], row['y']))
+        G.add_node(i, area=row['total_area_ha'], type=row['node_type'], pos=(row['x'], row['y']))
 
     # Recherche de voisinage
     coords = nodes_df[['x', 'y']].values
@@ -212,8 +230,19 @@ def calculate_pc_index(G: nx.Graph, total_area_km2: float) -> float:
                 
     return pc_sum / (total_area_km2**2)
 
-
-
+def graph_to_gdf_edges(G, crs):
+    """Transforme toutes les arêtes d'un graphe NetworkX en GeoDataFrame."""
+    edges = []
+    for u, v, data in G.edges(data=True):
+        edges.append({
+            'node_1': u,
+            'node_2': v,
+            'dist_m': data['dist_m'],
+            'cost_log': data['cost_log'],
+            'geometry': LineString([Point(G.nodes[u]['pos']), Point(G.nodes[v]['pos'])])
+        })
+    return gpd.GeoDataFrame(edges, crs=crs)
+    
 def calculate_pc_index_lcp(G: nx.Graph, total_area_km2: float, species_params: dict, gdf_lcp: gpd.GeoDataFrame = None):
     """
     Calcule le PC réel.
@@ -250,19 +279,6 @@ def calculate_pc_index_lcp(G: nx.Graph, total_area_km2: float, species_params: d
     pc_value = pc_sum / (total_area_km2**2)
 
     return pc_value, G_curr
-    
-def graph_to_gdf_edges(G, crs):
-    """Transforme toutes les arêtes d'un graphe NetworkX en GeoDataFrame."""
-    edges = []
-    for u, v, data in G.edges(data=True):
-        edges.append({
-            'node_1': u,
-            'node_2': v,
-            'dist_m': data['dist_m'],
-            'cost_log': data['cost_log'],
-            'geometry': LineString([Point(G.nodes[u]['pos']), Point(G.nodes[v]['pos'])])
-        })
-    return gpd.GeoDataFrame(edges, crs=crs)
 
 def calculate_edge_dpc(gdf_lcp: gpd.GeoDataFrame, G_curr: nx.Graph, total_area_km2: float, pc_real: float) -> gpd.GeoDataFrame:
     """
@@ -290,7 +306,6 @@ def calculate_edge_dpc(gdf_lcp: gpd.GeoDataFrame, G_curr: nx.Graph, total_area_k
 
     res = df.apply(compute_row, axis=1)
     
-    # Déballage des résultats dans les nouvelles colonnes
     df['dPC_val'], df['dPC_relative'] = zip(*res)
     return df.sort_values(by='dPC_val', ascending=False)
 
@@ -308,7 +323,7 @@ def calculate_edge_betweenness(gdf_lcp: gpd.GeoDataFrame, G_curr: nx.Graph) -> g
 
     df['ebc_score'] = df.apply(get_centrality, axis=1)
     
-    # 3. Normalisation de 0 à 100 pour la lisibilité
+    # 3. Normalisation de 0 à 100 
     if df['ebc_score'].max() > 0:
         df['ebc_score'] = (df['ebc_score'] / df['ebc_score'].max()) * 100
         
@@ -317,7 +332,6 @@ def calculate_edge_betweenness(gdf_lcp: gpd.GeoDataFrame, G_curr: nx.Graph) -> g
 def calculate_node_dpc(G_curr: nx.Graph, total_area_km2: float, species_params: dict) -> pd.DataFrame:
     """
     Calcule spécifiquement la fraction 'Connector' du dPC pour chaque nœud.
-    Identifie les stepping stones vitaux de Nancy.
     """
     # 1. Calcul du PC de référence (Réseau complet)
     pc_ref, _ = calculate_pc_index_lcp(G_curr, total_area_km2, species_params)
@@ -357,6 +371,97 @@ def calculate_node_dpc(G_curr: nx.Graph, total_area_km2: float, species_params: 
         })
 
     return pd.DataFrame(results).sort_values('dPC_connector', ascending=False)
+
+def classify_and_plot_corridors(gdf_lcp: gpd.GeoDataFrame, aoi_utm: gpd.GeoDataFrame, q: float = 0.5):
+    """
+    Categorizes corridors into four strategic types based on Flow and Rarity,
+    and generates a diagnostic map.
+    
+    Args:
+        gdf_lcp: GeoDataFrame containing dPC_relative and ebc_score.
+        aoi_utm: GeoDataFrame of the study area boundary.
+        q: Quantile threshold for classification (default 0.5 for median).
+    """
+    # 1. Define thresholds
+    flow_threshold = gdf_lcp['dPC_relative'].quantile(q)
+    rarity_threshold = gdf_lcp['ebc_score'].quantile(q)
+
+    # 2. Assign Categories
+    def _classify(row):
+        hi_flow = row['dPC_relative'] > flow_threshold
+        hi_rarity = row['ebc_score'] > rarity_threshold
+        
+        if hi_flow and hi_rarity: return 'Ecological highway'
+        if not hi_flow and hi_rarity: return 'Strategic bottleneck'
+        if hi_flow and not hi_rarity: return 'Redundant mesh'
+        return 'Local link'
+
+    gdf_lcp['category'] = gdf_lcp.apply(_classify, axis=1)
+
+    # 3. Visualization
+    fig, ax = plt.subplots(figsize=(12, 10))
+    aoi_utm.plot(ax=ax, color='#f8f9fa', edgecolor='#dee2e6', zorder=1)
+
+    category_colors = {
+        'Ecological highway': '#d00000',   # Dark Red
+        'Strategic bottleneck': '#ffba08',  # Gold/Orange
+        'Redundant mesh': '#3f37c9',      # Blue
+        'Local link': '#adb5bd',           # Grey
+    }
+
+    for cat, color in category_colors.items():
+        subset = gdf_lcp[gdf_lcp['category'] == cat]
+        if not subset.empty:
+            subset.plot(ax=ax, color=color, linewidth=1.5, label=f"{cat} ({len(subset)})", alpha=0.8, zorder=2)
+
+    plt.legend(title="Corridors categories", loc='lower right', frameon=True)
+    ax.set_axis_off()
+    plt.tight_layout()
+    
+    return gdf_lcp
+
+def lcp_heatmap(gdf_lcp: gpd.GeoDataFrame, aoi_utm: gpd.GeoDataFrame, res: int = 10, crs_utm: str = None) -> xr.DataArray:
+    """
+    Génère une heatmap de densité des chemins LCP.
+    Chaque pixel contient le nombre de chemins qui le traversent.
+    
+    Args:
+        gdf_lcp: GeoDataFrame des chemins (LCP).
+        aoi_utm: GeoDataFrame de la zone d'étude (pour cadrer le raster).
+        res: Résolution spatiale en mètres (par défaut 10m).
+        crs_utm
+    """
+    
+    # 1. Création du template vide (Image de référence)
+    da_ref = create_img_reference(aoi_utm, spatial_resolution=res, output_crs=crs_utm)
+    
+    # 2. Alignement des données
+    gdf_lcp_utm = gdf_lcp.to_crs(da_ref.rio.crs)
+    
+    # 3. Préparation des formes pour la rasterisation
+    # On attribue la valeur 1 à chaque géométrie
+    shapes = [(geom, 1) for geom in gdf_lcp_utm.geometry if geom is not None]
+
+    # 4. Rasterisation par accumulation 
+    heatmap_arr = features.rasterize(
+        shapes=shapes,
+        out_shape=(da_ref.rio.height, da_ref.rio.width),
+        transform=da_ref.rio.transform(),
+        fill=0,
+        all_touched=True, 
+        merge_alg=MergeAlg.add,
+        dtype='uint32'
+    )
+
+    # 5. Conversion en DataArray
+    da_heatmap = xr.DataArray(
+        heatmap_arr,
+        coords={"y": da_ref.y, "x": da_ref.x},
+        dims=("y", "x"),
+        name="lcp_density"
+    ).rio.write_crs(da_ref.rio.crs)
+    
+    return da_heatmap
     
 # def get_priority_corridors_ebc(
 #     G: nx.Graph, 
