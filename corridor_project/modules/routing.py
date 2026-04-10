@@ -4,6 +4,7 @@ import pandas as pd
 import geopandas as gpd
 from skimage.graph import MCP_Geometric
 from shapely.geometry import LineString
+from rasterio import features
 from tqdm import tqdm
 from typing import Dict, Any
 
@@ -35,77 +36,89 @@ def create_resistance_surface(
     cost_matrix[np.isnan(raster_da.values) | (raster_da.values == 0)] = default_cost
     
     return cost_matrix
-    
+
 def compute_lcp_network(
     corridors_gdf: gpd.GeoDataFrame, 
-    nodes_df: pd.DataFrame, 
+    nodes_df: gpd.GeoDataFrame,
     raster_da: xr.DataArray, 
     friction_dict: Dict[int, float]
 ) -> gpd.GeoDataFrame:
     """
-    Computes the Least Cost Path (LCP).
+    Computes the Least Cost Path (LCP) between habitat patches.
 
     Args:
         corridors_gdf (gpd.GeoDataFrame): Corridors (theoretical straight lines).
-        nodes_df (pd.DataFrame): Patch centroids with 'x' and 'y' coordinates.
+        nodes_df (pd.DataFrame): Contain the 'geometry' column.
         raster_da (xr.DataArray): Georeferenced landcover grid used as a friction base.
         friction_dict (Dict[int, float]): Mapping of landcover codes to travel costs.
 
     Returns:
         gpd.GeoDataFrame: Real paths (LineString) with 'real_dist' and 'importance_score'.
     """
-    # 1. Prepare cost surface
+    
+    # 1. Setup cost surface and MCP solver
     cost_matrix = create_resistance_surface(raster_da, friction_dict)
-    # MCP_Geometric allows diagonal movement with correct distance weighting
     mcp = MCP_Geometric(cost_matrix)
+    affine_transform = raster_da.rio.transform()
     
-    # 2. Setup coordinate transformation (UTM -> Pixel)
-    inv_transform = ~raster_da.rio.transform()
-    
+    # 2. Pre-calculate patch masks (Vector to Raster coordinates)
+    patch_masks = {}
+    for idx, row in nodes_df.iterrows():
+        mask = features.rasterize([(row.geometry, 1)], 
+                                  out_shape=raster_da.shape, 
+                                  transform=affine_transform)
+        coords = np.argwhere(mask == 1)
+        if len(coords) > 0:
+            patch_masks[idx] = coords
+            
+    # 3. Trace LCPs
     lcp_results = []
+    failed_links = 0
 
     for _, row in tqdm(corridors_gdf.iterrows(), total=len(corridors_gdf), desc="Tracing LCPs"):
         u, v = int(row['node_1']), int(row['node_2'])
+        
+        if u not in patch_masks or v not in patch_masks:
+            failed_links += 1
+            continue
 
         try:
-            # Get representative points from nodes_df
-            p1_utm = (nodes_df.loc[u, 'x'], nodes_df.loc[u, 'y'])
-            p2_utm = (nodes_df.loc[v, 'x'], nodes_df.loc[v, 'y'])
-   
-            # Transform UTM to Pixel (Col, Row)
-            start_px = inv_transform * p1_utm
-            end_px = inv_transform * p2_utm
+            starts, ends = patch_masks[u], patch_masks[v]
             
-            # MCP expects integer indices (Row, Col)
-            start_idx = (int(start_px[1]), int(start_px[0]))
-            end_idx = (int(end_px[1]), int(end_px[0]))
+            # Compute cumulative costs from all potential start pixels
+            cumulative_costs, _ = mcp.find_costs(starts=starts, ends=ends)
+            # Extract costs at destination pixels
+            costs_at_ends = cumulative_costs[ends[:, 0], ends[:, 1]]
+            # Connectivity check (threshold for unreachable areas)
+            if np.all(costs_at_ends >= 1e9):
+                failed_links += 1
+                continue
+
+            # Identify best entry point in patch V and traceback
+            best_end_idx = ends[np.argmin(costs_at_ends)]
+            path_pixels = mcp.traceback(best_end_idx)
             
-            # Compute path
-            mcp.find_costs(starts=[start_idx], ends=[end_idx])
-            path_pixels = mcp.traceback(end_idx) # Returns list of (row, col)
+            path_coords = [affine_transform * (c, r) for r, c in path_pixels]
             
-            # Transform back to UTM for GeoDataFrame
-            path_utm = [raster_da.rio.transform() * (c, r) for r, c in path_pixels]
+            if len(path_coords) >= 2:
+                path_geom = LineString(path_coords)
+                lcp_results.append({
+                    'node_1': u,
+                    'node_2': v,
+                    'theoretical_dist': row['dist_m'],
+                    'real_dist': path_geom.length,
+                    'geometry': path_geom
+                })
             
-            # Create geometry and calculate real length
-            path_geom = LineString(path_utm)
+        except Exception as e:
+            print(f"Critical error on link {u}-{v}: {e}")
+            raise e
             
-            lcp_results.append({
-                'node_1': u,
-                'node_2': v,
-                'theoretical_dist': row['dist_m'],
-                'real_dist': path_geom.length,
-                'geometry': path_geom
-            })
-            
-        except Exception:
-            print(f"Erreur critique sur le lien {u}-{v} : {type(e).__name__} - {e}")
-            if 'error_count' not in locals(): error_count = 0
-            error_count += 1
-            if error_count > 3:
-                raise e # Force l'arrêt pour lire le traceback complet
-            continue
-            
+    if not lcp_results:
+        print(f"Failure: No LCPs could be traced out of {len(corridors_gdf)} attempts.")
+        return gpd.GeoDataFrame(columns=['node_1', 'node_2', 'geometry'], crs=raster_da.rio.crs)
+
+    print(f"Success: {len(lcp_results)} corridors traced ({failed_links} failed).")
     return gpd.GeoDataFrame(lcp_results, crs=raster_da.rio.crs)
 
 def calculate_tortuosity(lcp_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:

@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import networkx as nx
 from sklearn.neighbors import BallTree
 from shapely.geometry import LineString, Point
+from shapely.ops import nearest_points
 from typing import Optional, Union, Any, List, Union, Tuple
 sys.path.insert(1, '../../Hugo/a_b_c_functions/spatial_analysis/')
 from utils_raster import raster_to_polygon
@@ -84,40 +85,37 @@ def get_connectivity_elements(
     # 1. Calcul MSPA
     da_core, da_islet, da_edge = fast_mspa(da_binary, edge_width_pixels=1)
     
-    # 2. Vectorisation des Cores
+    # 2. Vectorisation des Cores (pour calculer la surface interne de chaque patch)
     gdf_pure_cores = raster_to_polygon(da_core, data_type='uint8')
     gdf_pure_cores = gdf_pure_cores[gdf_pure_cores['value'] == 1].copy()
-    gdf_pure_cores['core_area_ha'] = gdf_pure_cores.geometry.area / 10000
+    if not gdf_pure_cores.empty:
+        gdf_pure_cores['core_area_ha'] = gdf_pure_cores.geometry.area / 10000
     
-    da_full_patches = da_binary.where(da_islet == 0, 0)
-    gdf_full_patches = raster_to_polygon(da_full_patches, data_type='uint8')
+    # 3. Vectorisation de tous les patchs d'habitat (Foreground complet)
+    gdf_full_patches = raster_to_polygon(da_binary, data_type='uint8')
     gdf_full_patches = gdf_full_patches[gdf_full_patches['value'] == 1].copy()
     gdf_full_patches['total_area_ha'] = gdf_full_patches.geometry.area / 10000
 
-    joined = gpd.sjoin(gdf_full_patches, gdf_pure_cores, how='left', predicate='contains')
-    patch_core_max = joined.groupby(joined.index)['core_area_ha'].max()
-    gdf_full_patches['max_core_ha'] = patch_core_max.fillna(0)
+    # Attribution de la surface de coeur max par patch
+    if not gdf_pure_cores.empty:
+        joined = gpd.sjoin(gdf_full_patches, gdf_pure_cores, how='left', predicate='intersects')
+        patch_core_max = joined.groupby(joined.index)['core_area_ha'].max()
+        gdf_full_patches['max_core_ha'] = patch_core_max.fillna(0)
+    else:
+        gdf_full_patches['max_core_ha'] = 0.0
     
-    # 3. Séparation des Cores selon le seuil de surface
-    mask_noyau = gdf_full_patches['max_core_ha'] >= core_min_ha
+    # 4. Classification
+    mask_noyau = gdf_full_patches['max_core_ha'] >= core_min_ha # Un Noyau (Core) a un coeur >= seuil
+    mask_ss = (~mask_noyau) & (gdf_full_patches['total_area_ha'] >= islet_min_ha) # Un Stepping Stone est soit un petit core, soit un islet (max_core_ha == 0)
     gdf_cores_final = gdf_full_patches[mask_noyau].copy()
     gdf_cores_final['class'] = "Core (Noyau)"
-    # Les Cores déclassés
-    gdf_small_cores = gdf_full_patches[
-        (~mask_noyau) & (gdf_full_patches['total_area_ha'] >= islet_min_ha)
-    ].copy()
-    gdf_small_cores['class'] = "Stepping Stone (Small Core)"
-
-    # 4. Extraction des Islets (sans core)
-    gdf_islets = raster_to_polygon(da_islet, data_type='uint8')
-    gdf_islets = gdf_islets[gdf_islets['value'] == 1].copy()
-    gdf_islets['total_area_ha'] = gdf_islets.geometry.area / 10000
-    # Filtre de surface pour les Islets
-    gdf_islets = gdf_islets[gdf_islets['total_area_ha'] >= islet_min_ha].copy()
-    gdf_islets['class'] = "Stepping Stone (Islet)"
-
-    # 5. Fusion pour créer la couche finale des Stepping Stones
-    gdf_stepping_stones = pd.concat([gdf_islets, gdf_small_cores], ignore_index=True)
+    gdf_stepping_stones = gdf_full_patches[mask_ss].copy()
+    if not gdf_stepping_stones.empty:
+        gdf_stepping_stones['class'] = np.where(
+            gdf_stepping_stones['max_core_ha'] > 0, 
+            "Stepping Stone (Small Core)", 
+            "Stepping Stone (Islet)"
+        )
 
     cols = ['geometry', 'total_area_ha', 'max_core_ha', 'class']
     return gdf_cores_final[cols], gdf_stepping_stones[cols]
@@ -147,53 +145,201 @@ def prepare_graph_nodes(gdf_cores: gpd.GeoDataFrame, gdf_islets: gpd.GeoDataFram
     nodes['y'] = rep_points.y
     return nodes
 
-def build_connectivity_graph_knn(nodes_df: pd.DataFrame, species_params: dict[str, Any]) -> nx.Graph:
+def build_connectivity_graph_knn(nodes_df: gpd.GeoDataFrame, species_params: dict[str, Any]) -> nx.Graph:
     """
     Builds a K-Nearest Neighbors (KNN) graph using species-specific dispersal parameters.
+    Use minimum distance between polygon boundaries (Edge-to-Edge) instead of centroids.
 
     Args:
-        nodes_df (pd.DataFrame): Patches with centroids ('x', 'y') and 'area_ha'.
+        nodes_df (gpd.GeoDataFrame): Patches with centroids ('x', 'y') and 'total_area_ha'.
         species_params (dict): Must contain 'd0' (dispersion_distance) and 'k_neighbors' (k).
 
     Returns:
         nx.Graph: Probabilistic connectivity network.
     """
-    graph_params = species_params['graph'] 
-    d0 = graph_params['d0']
-    k = graph_params['k_neighbors']
-
+    d0 = species_params['graph']['d0']
+    k = species_params['graph']['k_neighbors']
+    max_dist = 3 * d0  # Limite biologique de 3 * d0 (environ 13% de probabilité de survie)
+    
     # Squelette du graph
     G = nx.Graph()
     for i, row in nodes_df.iterrows():
         G.add_node(i, area=row['total_area_ha'], type=row['node_type'], pos=(row['x'], row['y']))
 
-    # Recherche de voisinage
-    coords = nodes_df[['x', 'y']].values
-    tree = BallTree(coords)
-    distances, indices = tree.query(coords, k=k+1)
-
-    # Création des liens et calcul des probabilités
-    for i in range(len(coords)):
-        for d, j_idx in zip(distances[i][1:], indices[i][1:]):
-            if d > (2 * d0): # Limite biologique de 3 * d0 (environ 13% de probabilité de survie)
-                continue
-
-            prob = np.exp(-d / d0) #probability of movement: exponential decay function
-            cost_val = -np.log(prob) #transformer la proba en log pour l'algo Dijkstra, astuce mathématique
-            G.add_edge(i, j_idx, 
-                       dist_m=d, 
-                       prob=prob, 
-                       cost_log=cost_val)
+    sindex = nodes_df.sindex
+    for i, row in nodes_df.iterrows():
+        current_geom = row.geometry
+        possible_neighbors_idx = list(sindex.query(current_geom.buffer(max_dist))) 
+        
+        # Calculate real geometry-to-geometry distances
+        neighbor_data = []
+        for idx in possible_neighbors_idx:
+            if idx == i: continue
+            target_geom = nodes_df.iloc[idx].geometry
+            dist = current_geom.distance(target_geom)
             
-    #  DIAGNOSTIC
+            if dist <= max_dist:
+                p1, p2 = nearest_points(current_geom, target_geom)
+                neighbor_data.append((idx, dist, p1, p2))
+        
+        # Sort by distance and take the K closest
+        neighbor_data.sort(key=lambda x: x[1])
+        for j_idx, d, p1, p2 in neighbor_data[:k]:
+            if not G.has_edge(i, j_idx):
+                prob = np.exp(-d / d0) #probability of movement: exponential decay function
+                G.add_edge(i, j_idx, dist_m=d, prob=prob, 
+                           cost_log=-np.log(prob), #transformer la proba en log pour l'algo Dijkstra, astuce mathématique
+                           anchor_pts=(p1, p2))
+
+    # --- DIAGNOSTIC ---
+    n_nodes = G.number_of_nodes()
+    n_edges = G.number_of_edges()
     isolated_nodes = [n for n, deg in G.degree() if deg == 0]
     n_isolated = len(isolated_nodes)
-    print(f"Graphe construit : {G.number_of_nodes()} nœuds et {G.number_of_edges()} arêtes.")
+    print(f"✓ Graphe construit : {n_nodes} nœuds et {n_edges} arêtes.")
+
     if n_isolated > 0:
-        print(f"Alerte : {n_isolated} réservoirs sont totalement isolés.")
-        
+        percent_isolated = (n_isolated / n_nodes) * 100
+        print(f"Warning : {n_isolated} réservoirs ({percent_isolated:.1f}%) sont totalement isolés.")
+            
     return G
+
+def build_rng_graph(nodes_df: gpd.GeoDataFrame, species_params: dict) -> nx.Graph:
+    """
+    Builds a Relative Neighborhood Graph (RNG) using geometry-to-geometry distances.
+    Prunes edges where an intermediate patch C provides a 'shorter' jump.
+    """
+    d0 = species_params['graph']['d0']
+    max_dist = 3 * d0 # Limite biologique de 3 * d0 (environ 13% de probabilité de survie)
+
+    # On commence par un graphe de base (tous les voisins dans le rayon max_dist)
+    G_candidate = nx.Graph()
+    for i, row in nodes_df.iterrows():
+        G_candidate.add_node(i, area=row['total_area_ha'], type=row['node_type'], pos=(row['x'], row['y']))
+    sindex = nodes_df.sindex
+    candidate_edges = []
+
+    # Trouver tous les candidats possibles (Recherche spatiale)
+    for i, row in tqdm(nodes_df.iterrows(), total=len(nodes_df), desc="Étape 1/2: Recherche candidats"):
+        current_geom = row.geometry
+        possible_neighbors = list(sindex.query(current_geom.buffer(max_dist)))
+        
+        for idx in possible_neighbors:
+            if idx <= i: continue # On évite les doublons (A-B et B-A)
+            
+            dist = current_geom.distance(nodes_df.iloc[idx].geometry)
+            if dist <= max_dist:
+                p1, p2 = nearest_points(current_geom, nodes_df.iloc[idx].geometry)
+                candidate_edges.append({
+                    'u': i, 'v': idx, 'dist': dist, 'p1': p1, 'p2': p2
+                })
+
+    # Filtrage RNG
+    G_rng = nx.Graph()
+    G_rng.add_nodes_from(G_candidate.nodes(data=True))
+
+    for edge in tqdm(candidate_edges, desc="Étape 2/2: Filtrage RNG"):
+        u, v, dist_uv = edge['u'], edge['v'], edge['dist']
+        is_rng = True
+        
+        # Critère RNG : Est-ce qu'il existe un patch C tel que dist(u,c) < dist(uv) ET dist(v,c) < dist(uv) ?
+        # On ne cherche que les C qui sont dans la zone d'intersection des deux cercles
+        p_u, p_v = edge['p1'], edge['p2']
+        search_zone = p_u.buffer(dist_uv).intersection(p_v.buffer(dist_uv))
+        potential_c = list(sindex.query(search_zone))
+        
+        for idx_c in potential_c:
+            if idx_c in [u, v]: continue
+            
+            geom_c = nodes_df.iloc[idx_c].geometry
+            if nodes_df.iloc[u].geometry.distance(geom_c) < dist_uv and \
+               nodes_df.iloc[v].geometry.distance(geom_c) < dist_uv:
+                is_rng = False
+                break
+        
+        if is_rng:
+            prob = np.exp(-dist_uv / d0)
+            G_rng.add_edge(u, v, 
+                           dist_m=dist_uv, 
+                           prob=prob, 
+                           cost_log=-np.log(prob),
+                           anchor_pts=(p_u, p_v))
+
+    print(f"Graphe RNG construit : {G_rng.number_of_nodes()} nœuds et {G_rng.number_of_edges()} arêtes.")
+    return G_rng
+
+def build_gabriel_graph(nodes_df: gpd.GeoDataFrame, species_params: dict) -> nx.Graph:
+    """
+    Construit un Graphe de Gabriel basé sur les distances Edge-to-Edge.
+    Moins restrictif que le RNG, il permet de garder des chemins alternatifs (boucles).
+    """
+    d0 = species_params['graph']['d0']
+    max_dist = 2 * d0 
+
+    # 1. Initialisation
+    G_candidate = nx.Graph()
+    for i, row in nodes_df.iterrows():
+        G_candidate.add_node(i, area=row['total_area_ha'], type=row['node_type'], pos=(row['x'], row['y']))
     
+    sindex = nodes_df.sindex
+    candidate_edges = []
+
+    # 2. Étape 1 : Recherche des candidats
+    for i, row in tqdm(nodes_df.iterrows(), total=len(nodes_df), desc="Étape 1/2: Recherche candidats"):
+        current_geom = row.geometry
+        possible_neighbors = list(sindex.query(current_geom.buffer(max_dist)))
+        
+        for idx in possible_neighbors:
+            if idx <= i: continue 
+            
+            target_geom = nodes_df.iloc[idx].geometry
+            dist = current_geom.distance(target_geom)
+            
+            if dist <= max_dist:
+                p1, p2 = nearest_points(current_geom, target_geom)
+                candidate_edges.append({
+                    'u': i, 'v': idx, 'dist': dist, 'p1': p1, 'p2': p2
+                })
+
+    # 3. Étape 2 : Filtrage Gabriel
+    G_gab = nx.Graph()
+    G_gab.add_nodes_from(G_candidate.nodes(data=True))
+
+    for edge in tqdm(candidate_edges, desc="Étape 2/2: Filtrage Gabriel"):
+        u, v, dist_uv = edge['u'], edge['v'], edge['dist']
+        is_gabriel = True
+        
+        p_u, p_v = edge['p1'], edge['p2']
+        
+        # --- LOGIQUE GABRIEL ---
+        # Le milieu du segment reliant les deux points les plus proches
+        midpoint = Point((p_u.x + p_v.x)/2, (p_u.y + p_v.y)/2)
+        radius = dist_uv / 2
+        
+        # Zone de recherche : le cercle de diamètre UV
+        search_zone = midpoint.buffer(radius)
+        potential_c = list(sindex.query(search_zone))
+        
+        for idx_c in potential_c:
+            if idx_c in [u, v]: continue
+            
+            geom_c = nodes_df.iloc[idx_c].geometry
+            # Si un patch C est plus proche du milieu que le rayon, on casse l'arête
+            if geom_c.distance(midpoint) < radius:
+                is_gabriel = False
+                break
+        
+        if is_gabriel:
+            prob = np.exp(-dist_uv / d0)
+            G_gab.add_edge(u, v, 
+                           dist_m=dist_uv, 
+                           prob=prob, 
+                           cost_log=-np.log(prob),
+                           anchor_pts=(p_u, p_v))
+
+    print(f"Graphe de Gabriel construit : {G_gab.number_of_nodes()} nœuds et {G_gab.number_of_edges()} arêtes.")
+    return G_gab
+
 def calculate_pc_index(G: nx.Graph, total_area_km2: float) -> float:
     """
     Calculates the Probability of Connectivity (PC) Index for the landscape. Measures the overall 'permeability' of the landscape for a given species.
@@ -234,12 +380,13 @@ def graph_to_gdf_edges(G, crs):
     """Transforme toutes les arêtes d'un graphe NetworkX en GeoDataFrame."""
     edges = []
     for u, v, data in G.edges(data=True):
+        p1, p2 = data['anchor_pts']
         edges.append({
             'node_1': u,
             'node_2': v,
             'dist_m': data['dist_m'],
             'cost_log': data['cost_log'],
-            'geometry': LineString([Point(G.nodes[u]['pos']), Point(G.nodes[v]['pos'])])
+            'geometry': LineString([p1, p2]) # now the actual gap, not the centroid distance
         })
     return gpd.GeoDataFrame(edges, crs=crs)
     
@@ -329,23 +476,23 @@ def calculate_edge_betweenness(gdf_lcp: gpd.GeoDataFrame, G_curr: nx.Graph) -> g
         
     return df.sort_values(by='ebc_score', ascending=False)
 
-def calculate_node_dpc(G_curr: nx.Graph, total_area_km2: float, species_params: dict) -> pd.DataFrame:
+def calculate_node_dpc(G_lcp: nx.Graph, total_area_km2: float, species_params: dict) -> pd.DataFrame:
     """
     Calcule spécifiquement la fraction 'Connector' du dPC pour chaque nœud.
     """
     # 1. Calcul du PC de référence (Réseau complet)
-    pc_ref, _ = calculate_pc_index_lcp(G_curr, total_area_km2, species_params)
-    nodes = list(G_curr.nodes())
+    pc_ref, _ = calculate_pc_index_lcp(G_lcp, total_area_km2, species_params)
+    nodes = list(G_lcp.nodes())
     results = []
 
     print(f"Analyse de connectivité pour {len(nodes)} noyaux...")
     for node_i in tqdm(nodes, desc="Calcul dPC Nodes", unit="node"):
         # A. Fraction Intra : Importance de la surface propre (ai * ai)
-        a_i = G_curr.nodes[node_i]['area'] / 100
+        a_i = G_lcp.nodes[node_i]['area'] / 100
         dpc_intra = (a_i * a_i) / (total_area_km2**2)
         
         # B. Calcul du PC sans le noeud i pour isoler le reste
-        G_temp = G_curr.copy()
+        G_temp = G_lcp.copy()
         G_temp.remove_node(node_i)
 
 
@@ -365,14 +512,14 @@ def calculate_node_dpc(G_curr: nx.Graph, total_area_km2: float, species_params: 
         
         results.append({
             'node_id': node_i,
-            'area_ha': G_curr.nodes[node_i]['area'],
+            'area_ha': G_lcp.nodes[node_i]['area'],
             'dPC_total': (dpc_total / pc_ref) * 100,
             'dPC_connector': (dpc_connector / pc_ref) * 100
         })
 
     return pd.DataFrame(results).sort_values('dPC_connector', ascending=False)
 
-def classify_and_plot_corridors(gdf_lcp: gpd.GeoDataFrame, aoi_utm: gpd.GeoDataFrame, q: float = 0.5):
+def classify_and_plot_corridors(gdf_lcp: gpd.GeoDataFrame, df_nodes: gpd.GeoDataFrame, aoi_utm: gpd.GeoDataFrame, q: float = 0.5):
     """
     Categorizes corridors into four strategic types based on Flow and Rarity,
     and generates a diagnostic map.
@@ -400,21 +547,31 @@ def classify_and_plot_corridors(gdf_lcp: gpd.GeoDataFrame, aoi_utm: gpd.GeoDataF
 
     # 3. Visualization
     fig, ax = plt.subplots(figsize=(12, 10))
-    aoi_utm.plot(ax=ax, color='#f8f9fa', edgecolor='#dee2e6', zorder=1)
+    ax.set_facecolor('white')
+    aoi_utm.plot(ax=ax, color='#f8f9fa', edgecolor='#ced4da', zorder=1)
+    df_nodes.plot(ax=ax, color='#2d6a4f', alpha=0.5, label='Habitats', zorder=2)
 
-    category_colors = {
-        'Ecological highway': '#d00000',   # Dark Red
-        'Strategic bottleneck': '#ffba08',  # Gold/Orange
-        'Redundant mesh': '#3f37c9',      # Blue
-        'Local link': '#adb5bd',           # Grey
-    }
+    order = [
+        ('Local link', '#adb5bd', 0.6, 1.4),       # Gris, fin
+        ('Redundant mesh', '#3f37c9', 0.7, 1.6),    # Bleu
+        ('Strategic bottleneck', '#ffba08', 0.9, 1.8), # Or/Orange, plus épais
+        ('Ecological highway', '#d00000', 1.0, 2)    # Rouge, au-dessus
+    ]
+    
+    for cat, color, alpha, linewidth in order:
+            subset = gdf_lcp[gdf_lcp['category'] == cat]
+            if not subset.empty:
+                subset.plot(
+                    ax=ax, 
+                    color=color, 
+                    linewidth=linewidth, 
+                    alpha=alpha, 
+                    label=f"{cat} ({len(subset)})", 
+                    zorder=3 if cat in ['Local link', 'Redundant mesh'] else 4
+                )
 
-    for cat, color in category_colors.items():
-        subset = gdf_lcp[gdf_lcp['category'] == cat]
-        if not subset.empty:
-            subset.plot(ax=ax, color=color, linewidth=1.5, label=f"{cat} ({len(subset)})", alpha=0.8, zorder=2)
-
-    plt.legend(title="Corridors categories", loc='lower right', frameon=True)
+    plt.legend(title="Catégories de Corridors", loc='lower right', frameon=True, fontsize=10)
+    plt.title(f"Diagnostic de Connectivité : Hiérarchie des Corridors LCP", fontsize=15, pad=20)
     ax.set_axis_off()
     plt.tight_layout()
     
