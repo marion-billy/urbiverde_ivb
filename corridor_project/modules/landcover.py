@@ -63,26 +63,33 @@ def get_city_landcover(
     wc_data = wc_data.rio.clip(aoi_utm.geometry, aoi_utm.crs, all_touched=True, drop=True)
 
     # --- 2. Traitement Highways OSM ---
+    accepted_highways = [
+    'motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link', 
+    'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'busway',
+    'unclassified', 'road', 'residential'
+    ]
+    
     highways: gpd.GeoDataFrame = ox.features_from_polygon(
         aoi_raw.geometry.union_all(), 
-        tags={"highway": True}
+        tags={"highway": accepted_highways}
     )
     
     # Filtrage et reprojection en mètres (UTM) pour les buffers
     highways = highways[highways.geometry.type.isin(['LineString', 'MultiLineString'])].to_crs(utm_epsg)
     
     widths: Dict[str, int] = {
-        'motorway': 30, 
-        'trunk': 20, 
-        'primary': 20, 
-        'secondary': 15, 
-        'tertiary': 10, 
-        'unclassified': 10,
+        'motorway': 30, 'motorway_link': 30,
+        'trunk': 20, 'trunk_link': 20,
+        'primary': 20, 'primary_link': 20,
+        'secondary': 15, 'secondary_link': 15,
+        'tertiary': 10, 'tertiary_link': 15, 'busway': 15, 
+        'unclassified': 10, 'road': 10, 
         'residential': 10,
     }
     
     # Calcul des emprises au sol
-    highways['width'] = highways['highway'].apply(lambda x: widths.get(x, 5))
+    highways['width'] = highways['highway'].apply(lambda x: widths.get(x, 0))
+    highways = highways[highways['width'] > 0]
     highways['geometry'] = highways.geometry.buffer(highways['width'] / 2)
     
     # Préparation pour la rasterisation (code 51 et 52)
