@@ -34,10 +34,11 @@ def get_city_landcover(
     aoi_ee: ee.Geometry, 
     aoi_utm: gpd.GeoDataFrame,
     aoi_raw: gpd.GeoDataFrame,
-    utm_epsg: str
+    utm_epsg: str,
+    habitat_codes: list
 ) -> xr.DataArray:
     """
-    Génère une carte d'occupation du sol fusionnant ESA WorldCover et OSM Highways.
+    Génère une carte d'occupation du sol fusionnant ESA WorldCover et OSM Highways Railways.
     
     Args:
         aoi_ee (`ee.Geometry`): Emprise pour l'extraction Google Earth Engine.
@@ -50,58 +51,70 @@ def get_city_landcover(
     """
     # --- 1. Extraction WorldCover ---
     wc_img: ee.Image = ee.ImageCollection('ESA/WorldCover/v200').mosaic()
-    
-    wc_xr: xr.Dataset = prepare_ds_xarray_ee(
-        wc_img, 
-        scale=10, 
-        geometry=aoi_ee, 
-        crs=utm_epsg
-    ).compute()
-    
+    wc_xr = prepare_ds_xarray_ee(wc_img, scale=10, geometry=aoi_ee, crs=utm_epsg).compute()
     wc_data: xr.DataArray = wc_xr['Map'].squeeze()
     wc_data.rio.write_crs(utm_epsg, inplace=True)
     wc_data = wc_data.rio.clip(aoi_utm.geometry, aoi_utm.crs, all_touched=True, drop=True)
 
-    # --- 2. Traitement Highways OSM ---
+    # --- 2. Traitement OSM ---
     accepted_highways = [
     'motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link', 
     'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'busway',
-    'unclassified', 'road', 'residential'
+    'unclassified', 'road', 'residential',
+    'pedestrian', 'path', 'footway', 'track', 'living_street', 'service'
     ]
     
-    highways: gpd.GeoDataFrame = ox.features_from_polygon(
+    osm_features = ox.features_from_polygon(
         aoi_raw.geometry.union_all(), 
-        tags={"highway": accepted_highways}
+        tags={"highway": accepted_highways, "railway": ["rail", "tram"], "building": True}
     )
-    
-    # Filtrage et reprojection en mètres (UTM) pour les buffers
-    highways = highways[highways.geometry.type.isin(['LineString', 'MultiLineString'])].to_crs(utm_epsg)
+
+    osm_proj = osm_features.to_crs(utm_epsg)
+    # Lignes (Routes/Rails) vs Polygones (Bâtiments)
+    lines = osm_proj[osm_proj.geometry.type.isin(['LineString', 'MultiLineString'])].copy()
+    buildings = osm_proj[osm_proj.geometry.type.isin(['Polygon', 'MultiPolygon'])].copy()
     
     widths: Dict[str, int] = {
-        'motorway': 30, 'motorway_link': 30,
-        'trunk': 20, 'trunk_link': 20,
+        'motorway': 30, 'motorway_link': 30, 'rail': 30, 
+        'trunk': 20, 'trunk_link': 20, 'tram': 20,
         'primary': 20, 'primary_link': 20,
         'secondary': 15, 'secondary_link': 15,
-        'tertiary': 10, 'tertiary_link': 15, 'busway': 15, 
+        'tertiary': 15, 'tertiary_link': 15, 'busway': 15, 
         'unclassified': 10, 'road': 10, 
         'residential': 10,
+        'pedestrian': 8, 'path': 8, 'footway': 8, 'track': 8, 'living_street': 8, 'service': 8
     }
     
     # Calcul des emprises au sol
-    highways['width'] = highways['highway'].apply(lambda x: widths.get(x, 0))
-    highways = highways[highways['width'] > 0]
-    highways['geometry'] = highways.geometry.buffer(highways['width'] / 2)
+    lines['width'] = lines.apply(
+        lambda row: widths.get(row.get('highway'), widths.get(row.get('railway'), 0)), 
+        axis=1
+    )
+    lines = lines[lines['width'] > 0].copy()
+    lines['geometry'] = lines.geometry.buffer(lines['width'] / 2)
     
-    # Préparation pour la rasterisation (code 51 et 52)
-    major_roads = ['motorway', 'trunk', 'primary']
-    highways['wc_code'] = np.where(highways['highway'].isin(major_roads), 51, 52)
+    # Attribution des codes
+    def assign_line_code(row):
+        hw, rw = row.get('highway'), row.get('railway')
+        if rw in ['rail', 'tram'] or hw in ['motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link']: return 52
+        if hw in ['secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'busway', 'unclassified', 'road', 'residential']: return 53
+        if hw in ['pedestrian', 'path', 'footway', 'track', 'living_street', 'service']: return 54
+        return 0
+    lines['wc_code'] = lines.apply(assign_line_code, axis=1)
 
-    # --- 3. Fusion Landcover ---
-    # Rasterisation des routes sur la grille WorldCover
-    da_osm_raster = rasterize_osm(wc_data, highways)
+    buildings['wc_code'] = 51
+    all_features = pd.concat([lines, buildings]).sort_values(by='wc_code')
     
-    # Fusion : On injecte les routes OSM (51 et 52) par-dessus WorldCover
-    da_lc = xr.where(da_osm_raster > 0, da_osm_raster, wc_data)
+    # --- 3. Fusion Landcover ---
+    da_osm_raster = rasterize_osm(wc_data, all_features)
+
+    # 54 n'écrase que si ce n'est pas de l'habitat
+    is_not_habitat = ~wc_data.isin(habitat_codes)
+    da_lc = xr.where((da_osm_raster == 54) & is_not_habitat, 54,
+             xr.where(da_osm_raster == 53, 53,
+              xr.where(da_osm_raster == 52, 52,
+               xr.where(da_osm_raster == 51, 51, 
+                wc_data))))
     da_lc.rio.write_crs(utm_epsg, inplace=True)
     
     return da_lc

@@ -294,8 +294,7 @@ def build_gabriel_graph(nodes_df: gpd.GeoDataFrame, species_params: dict) -> nx.
             
             target_geom = nodes_df.iloc[idx].geometry
             dist = current_geom.distance(target_geom)
-            
-            if dist <= max_dist:
+            if 0.1 < dist <= max_dist:
                 p1, p2 = nearest_points(current_geom, target_geom)
                 candidate_edges.append({
                     'u': i, 'v': idx, 'dist': dist, 'p1': p1, 'p2': p2
