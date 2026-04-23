@@ -19,6 +19,11 @@ def plot_connectivity_ruptures(gdf_lcp0, gdf_lcp, aoi_utm, df_nodes, G_lcp):
     # 2. Identifier les nœuds isolés 
     isolated_nodes_list = list(nx.isolates(G_lcp))
     isolated_nodes_gdf = df_nodes[df_nodes.index.isin(isolated_nodes_list)]
+
+    count_func = len(gdf_lcp)
+    count_rupt = len(rupture_corridors) if not rupture_corridors.empty else 0
+    count_nodes = len(df_nodes)
+    count_iso = len(isolated_nodes_list)
     
     # 3. Préparation de la carte
     fig, ax = plt.subplots(figsize=(14, 12))
@@ -38,10 +43,10 @@ def plot_connectivity_ruptures(gdf_lcp0, gdf_lcp, aoi_utm, df_nodes, G_lcp):
         isolated_nodes_gdf.plot(ax=ax, facecolor='none', edgecolor='black', linewidth=2, markersize=100)
 
     handles = [
-        mlines.Line2D([], [], color='#adb5bd', linewidth=2, label='Corridors Fonctionnels'),
-        mlines.Line2D([], [], color='#ff0055', linewidth=2, label='Zones de Rupture'),
-        mpatches.Patch(color='#206c2c', label='Habitat Patches'),
-        mpatches.Patch(facecolor='none', edgecolor='black', linewidth=2, label='Habitat Isolé')
+        mlines.Line2D([], [], color='#adb5bd', linewidth=2, label=f'Corridors Fonctionnels ({count_func})'),
+        mlines.Line2D([], [], color='#ff0055', linewidth=2, label=f'Zones de Rupture ({count_rupt})'),
+        mpatches.Patch(color='#206c2c', label=f'Habitat Patches ({count_nodes})'),
+        mpatches.Patch(facecolor='none', edgecolor='black', linewidth=2, label=f'Habitats Isolés ({count_iso})')
     ]
     
     plt.title("Diagnostic : Zones de rupture et habitats isolés", fontsize=16, color='black', pad=20)
@@ -50,57 +55,37 @@ def plot_connectivity_ruptures(gdf_lcp0, gdf_lcp, aoi_utm, df_nodes, G_lcp):
     plt.tight_layout()
     plt.show()
 
-def classify_and_plot_corridors(gdf_lcp: gpd.GeoDataFrame, df_nodes: gpd.GeoDataFrame, aoi_utm: gpd.GeoDataFrame, q: float = 0.5):
+def plot_classified_corridors(gdf_lcp: gpd.GeoDataFrame, df_nodes: gpd.GeoDataFrame, aoi_utm: gpd.GeoDataFrame):
     """
-    Categorizes corridors into four strategic types based on Flow and Rarity,
-    and generates a diagnostic map.
-    
-    Args:
-        gdf_lcp: GeoDataFrame containing dPC_relative and ebc_score.
-        aoi_utm: GeoDataFrame of the study area boundary.
-        q: Quantile threshold for classification (default 0.5 for median).
+    Generates a diagnostic map of four corridors types based on Flow and Rarity.
     """
-    # 1. Define thresholds
-    flow_threshold = gdf_lcp['dPC_relative'].quantile(q)
-    rarity_threshold = gdf_lcp['ebc_score'].quantile(q)
-
-    # 2. Assign Categories
-    def _classify(row):
-        hi_flow = row['dPC_relative'] > flow_threshold
-        hi_rarity = row['ebc_score'] > rarity_threshold
-        
-        if hi_flow and hi_rarity: return 'Ecological highway'
-        if not hi_flow and hi_rarity: return 'Strategic bottleneck'
-        if hi_flow and not hi_rarity: return 'Redundant mesh'
-        return 'Local link'
-
-    gdf_lcp['category'] = gdf_lcp.apply(_classify, axis=1)
-
-    # 3. Visualization
     fig, ax = plt.subplots(figsize=(14, 12))
     aoi_utm.plot(ax=ax, color='#f8f9fa', edgecolor='#ced4da', zorder=1)
     
     style_map = {
-        'Local link': ('#adb5bd', 1.4),
-        'Redundant mesh': ('#3f37c9', 1.6),
-        'Strategic bottleneck': ('#ffba08', 1.8),
-        'Ecological highway': ('purple', 2.0)
-    }  
-    for cat, (color, lw) in style_map.items():
+        'Local link':           ('#adb5bd', 1.4, 1), 
+        'Redundant mesh':       ('#0064d2', 1.6, 2),
+        'Strategic bottleneck': ('#6200EA', 1.8, 3), 
+        'Ecological highway':   ('#FF6D00', 2.0, 4) 
+    }
+    
+    for cat, (color, lw, z) in style_map.items():
         subset = gdf_lcp[gdf_lcp['category'] == cat]
         if not subset.empty:
-            subset.plot(ax=ax, color=color, linewidth=lw, alpha=0.6, zorder=3)
+            subset.plot(ax=ax, color=color, linewidth=lw, alpha=0.7, zorder=z)
 
-    df_nodes.plot(ax=ax, color='#206c2c', alpha=0.6, label='Habitats', zorder=2)
+    # Nœuds (Habitats)
+    df_nodes.plot(ax=ax, color='#206c2c', alpha=0.6, zorder=5)
 
-    handles = [mlines.Line2D([], [], color=c, label=f"{l}") for l, (c, w) in style_map.items()]
+    handles = [mlines.Line2D([], [], color=c, linewidth=2.5, label=f"{l}") 
+               for l, (c, w, z) in style_map.items()]
     handles.append(mpatches.Patch(color='#206c2c', label='Habitats'))
     
-    plt.legend(handles=handles, loc='upper right', fontsize=12)
+    plt.legend(handles=handles, loc='upper right', fontsize=12, frameon=True)
     plt.title(f"Diagnostic de Connectivité : Hiérarchie des Corridors", fontsize=16, color='black', pad=20)
     ax.set_axis_off()
     plt.tight_layout()
-    return gdf_lcp
+    plt.show()
 
 def plot_connectivity_heatmap(da_heatmap, df_nodes, aoi_utm, filter_size=3):
     """

@@ -11,32 +11,37 @@ from typing import Dict, Any
 def create_resistance_surface(
     raster_da: xr.DataArray, 
     friction_dict: dict[int, float], 
-    default_cost: int = 1000
-) -> np.ndarray:
+    default_cost: float = 100.0
+    ) -> np.ndarray:
     """
-    Translates a LandCover DataArray into a cost surface (friction map).
-    
-    Args:
-        raster_da (xr.DataArray): The augmented landcover grid (georeferenced).
-        friction_dict (dict[int, float]): Mapping of landcover codes to travel costs.
-        default_cost (int, optional): Cost for undefined or NaN pixels. Defaults to 1000.
-    
-    Returns:
-        np.ndarray: A 2D friction matrix compatible with MCP algorithms.
-    """
-    # Initialize with default high cost (impassable)
-    cost_matrix = np.full(raster_da.shape, default_cost, dtype=np.float32)
-    
-    # Map each landcover code to its friction value
-    for code, cost in friction_dict.items():
-        mask = (raster_da.values == code)
-        cost_matrix[mask] = cost
-        
-    # Handle NaNs and 0 (no data) as impassable
-    cost_matrix[np.isnan(raster_da.values) | (raster_da.values == 0)] = default_cost
-    
-    return cost_matrix
+    Traduit un raster d'occupation du sol en surface de coût pour MCP_Geometric.
 
+    Les barrières imperméables sont encodées comme np.nan dans friction_dict :
+        friction[xx] = np.nan  →  cost_matrix[raster == xx] = np.inf
+    MCP_Geometric ne peut pas traverser np.inf.
+
+    Args:
+        raster_da    (xr.DataArray)    : raster d'occupation du sol georéférencé
+        friction_dict (dict[int,float]): code → coût (np.nan pour barrières)
+        default_cost (float)           : coût pour codes non définis (défaut 100)
+
+    Returns:
+        np.ndarray float32 : surface de coût (np.inf pour barrières et hors-AOI)
+    """
+    cost_matrix = np.full(raster_da.shape, default_cost, dtype=np.float32)
+
+    for code, cost in friction_dict.items():
+        mask = raster_da.values == code
+        if pd.isna(cost):
+            cost_matrix[mask] = np.inf
+        else:
+            cost_matrix[mask] = float(cost)
+
+    # Hors AOI (NaN ou 0 dans le raster) → imperméable
+    cost_matrix[np.isnan(raster_da.values) | (raster_da.values == 0)] = np.inf
+
+    return cost_matrix
+    
 def compute_lcp_network(
     corridors_gdf: gpd.GeoDataFrame, 
     nodes_df: gpd.GeoDataFrame,
@@ -93,6 +98,7 @@ def compute_lcp_network(
             if np.all(costs_at_ends >= 1e9):
                 failed_links += 1
                 continue
+            cost_at_end = np.min(costs_at_ends)
 
             # Identify best entry point in patch V and traceback
             best_end_idx = ends[np.argmin(costs_at_ends)]
@@ -107,6 +113,8 @@ def compute_lcp_network(
                     'node_2': v,
                     'theoretical_dist': row['dist_m'],
                     'real_dist': path_geom.length,
+                    'accumulated_cost': cost_at_end,
+                    'efficiency': path_geom.length / cost_at_end if cost_at_end > 0 else 0, 
                     'geometry': path_geom
                 })
             

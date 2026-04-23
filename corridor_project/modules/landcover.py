@@ -13,6 +13,7 @@ from utils_gee import prepare_ds_xarray_ee
 sys.path.insert(1, '../../Hugo/a_b_c_functions/spatial_analysis/')
 from utils_proj import get_utm_epsg
 from utils_vector import gdf_to_bbox
+from utils_raster import *
 
 def setup_aoi(aoi_raw: gpd.GeoDataFrame) -> tuple[gpd.GeoDataFrame, ee.Geometry, str]:
     """
@@ -76,13 +77,12 @@ def get_city_landcover(
     
     widths: Dict[str, int] = {
         'motorway': 30, 'motorway_link': 30, 'rail': 30, 
-        'trunk': 20, 'trunk_link': 20, 'tram': 20,
-        'primary': 20, 'primary_link': 20,
-        'secondary': 15, 'secondary_link': 15,
-        'tertiary': 15, 'tertiary_link': 15, 'busway': 15, 
-        'unclassified': 10, 'road': 10, 
-        'residential': 10,
-        'pedestrian': 8, 'path': 8, 'footway': 8, 'track': 8, 'living_street': 8, 'service': 8
+        'trunk': 30, 'trunk_link': 30, 'tram': 30,
+        'primary': 30, 'primary_link': 30,
+        'secondary': 20, 'secondary_link': 20,
+        'tertiary': 20, 'tertiary_link': 20, 'busway': 20, 
+        'unclassified': 20, 'road': 20, 'residential': 20,
+        'pedestrian': 10, 'path': 10, 'footway': 10, 'track': 10, 'living_street': 10, 'service': 10
     }
     
     # Calcul des emprises au sol
@@ -97,7 +97,6 @@ def get_city_landcover(
     def assign_line_code(row):
         hw, rw = row.get('highway'), row.get('railway')
         if rw in ['rail', 'tram'] or hw in ['motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link']: return 52
-        if hw in ['secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'busway', 'unclassified', 'road', 'residential']: return 53
         if hw in ['pedestrian', 'path', 'footway', 'track', 'living_street', 'service']: return 54
         return 0
     lines['wc_code'] = lines.apply(assign_line_code, axis=1)
@@ -110,12 +109,14 @@ def get_city_landcover(
 
     # 54 n'écrase que si ce n'est pas de l'habitat
     is_not_habitat = ~wc_data.isin(habitat_codes)
+    # is_not_habitat = resample_raster(is_not_habitat, da_osm_raster)
+    
     da_lc = xr.where((da_osm_raster == 54) & is_not_habitat, 54,
              xr.where(da_osm_raster == 53, 53,
               xr.where(da_osm_raster == 52, 52,
                xr.where(da_osm_raster == 51, 51, 
                 wc_data))))
-    da_lc.rio.write_crs(utm_epsg, inplace=True)
+    da_lc = da_lc.rio.write_crs(utm_epsg, inplace=True)
     
     return da_lc
 
@@ -131,6 +132,7 @@ def rasterize_osm(wc_da: xr.DataArray, osm_gdf: gpd.GeoDataFrame) -> xr.DataArra
         xr.DataArray: Rasterized roads with code 51 or 52.
     """
     shapes = [(geom, value) for geom, value in zip(osm_gdf.geometry, osm_gdf['wc_code'])]
+    # raster_to_polygon
     rasterized = features.rasterize(
         shapes=shapes,
         out_shape=wc_da.shape,
@@ -272,34 +274,3 @@ def rasterize_cosia(wc_da: xr.DataArray, cosia_gdf: gpd.GeoDataFrame) -> xr.Data
         name="cosia_only"
     ).rio.write_crs(wc_da.rio.crs)
 
-def compute_landcover_stats(
-    da: xr.DataArray, 
-    labels_map: Dict[int, str], 
-    aoi_mask: Optional[xr.DataArray] = None
-) -> pd.DataFrame:
-    """
-    Calculates surface areas (km2) for each landcover class.
-
-    Args:
-        da (xr.DataArray): Raster data to analyze.
-        labels_map (Dict[int, str]): Legend for mapping codes to names.
-        aoi_mask (Optional[xr.DataArray]): Optional mask to restrict analysis area.
-
-    Returns:
-        pd.DataFrame: Sorted table with pixel counts and area in km2.
-    """
-    if aoi_mask is not None:
-        da = da.where(aoi_mask > 0)
-        
-    res_x, res_y = da.rio.resolution()
-    pixel_area_km2 = abs(res_x * res_y) / 1e6
-    
-    # Calculate frequency
-    counts = da.to_series().value_counts()
-    stats = pd.DataFrame(counts).rename(columns={0: 'pixels', 'count': 'pixels'})
-    stats['area_km2'] = stats['pixels'] * pixel_area_km2
-    
-    # Map index to class labels
-    stats.index = stats.index.map(labels_map)
-    
-    return stats.drop(index=[np.nan], errors='ignore').sort_values(by='area_km2', ascending=False)
