@@ -30,7 +30,7 @@ def setup_aoi(aoi_raw: gpd.GeoDataFrame) -> tuple[gpd.GeoDataFrame, ee.Geometry,
     aoi_ee = geemap.gdf_to_ee(gdf_to_bbox(aoi_utm))
     
     return aoi_utm, aoi_ee, utm_epsg
-    
+
 def get_city_landcover(
     aoi_ee: ee.Geometry, 
     aoi_utm: gpd.GeoDataFrame,
@@ -39,7 +39,7 @@ def get_city_landcover(
     habitat_codes: list
 ) -> xr.DataArray:
     """
-    Génère une carte d'occupation du sol fusionnant ESA WorldCover et OSM Highways Railways.
+    Génère une carte d'occupation du sol fusionnant ESA WorldCover et OSM Highways Railways + Buildings + Waterways
     
     Args:
         aoi_ee (`ee.Geometry`): Emprise pour l'extraction Google Earth Engine.
@@ -58,6 +58,9 @@ def get_city_landcover(
     wc_data = wc_data.rio.clip(aoi_utm.geometry, aoi_utm.crs, all_touched=True, drop=True)
 
     # --- 2. Traitement OSM ---
+    ox.settings.requests_timeout = 600
+    ox.settings.use_cache = True
+
     accepted_highways = [
     'motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link', 
     'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'busway',
@@ -67,14 +70,18 @@ def get_city_landcover(
     
     osm_features = ox.features_from_polygon(
         aoi_raw.geometry.union_all(), 
-        tags={"highway": accepted_highways, "railway": ["rail", "tram"], "building": True}
+        tags={"highway": accepted_highways, "railway": ["rail", "tram"], "building": True, "natural": ["water"], "landuse": ["reservoir"]}
     )
 
     osm_proj = osm_features.to_crs(utm_epsg)
-    # Lignes (Routes/Rails) vs Polygones (Bâtiments)
-    lines = osm_proj[osm_proj.geometry.type.isin(['LineString', 'MultiLineString'])].copy()
-    buildings = osm_proj[osm_proj.geometry.type.isin(['Polygon', 'MultiPolygon'])].copy()
     
+    lines = osm_proj[(osm_proj['highway'].notna() | osm_proj['railway'].notna()) & (osm_proj.geometry.type.isin(['LineString', 'MultiLineString']))].copy()
+    buildings = osm_proj[osm_proj['building'].notna()].copy()
+    waterways = osm_proj[
+    ((osm_proj['natural'] == 'water') | (osm_proj['landuse'] == 'reservoir')) 
+    & (osm_proj.geometry.type.isin(['Polygon', 'MultiPolygon']))
+].copy()
+
     widths: Dict[str, int] = {
         'motorway': 30, 'motorway_link': 30, 'rail': 30, 
         'trunk': 30, 'trunk_link': 30, 'tram': 30,
@@ -97,13 +104,25 @@ def get_city_landcover(
     def assign_line_code(row):
         hw, rw = row.get('highway'), row.get('railway')
         if rw in ['rail', 'tram'] or hw in ['motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link']: return 52
+        if hw in ['secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified', 'road', 'residential', 'busway']: return 53
         if hw in ['pedestrian', 'path', 'footway', 'track', 'living_street', 'service']: return 54
         return 0
     lines['wc_code'] = lines.apply(assign_line_code, axis=1)
 
     buildings['wc_code'] = 51
-    all_features = pd.concat([lines, buildings]).sort_values(by='wc_code')
+
+    waterways['wc_code'] = 80
+
+    all_features = pd.concat([waterways, buildings, lines])
+    custom_order = [80, 51, 52, 53, 54] 
     
+    all_features['wc_order'] = pd.Categorical(
+        all_features['wc_code'], 
+        categories=custom_order, 
+        ordered=True
+    )
+    all_features = all_features.sort_values('wc_order')
+
     # --- 3. Fusion Landcover ---
     da_osm_raster = rasterize_osm(wc_data, all_features)
 
@@ -112,10 +131,11 @@ def get_city_landcover(
     # is_not_habitat = resample_raster(is_not_habitat, da_osm_raster)
     
     da_lc = xr.where((da_osm_raster == 54) & is_not_habitat, 54,
-             xr.where(da_osm_raster == 53, 53,
-              xr.where(da_osm_raster == 52, 52,
-               xr.where(da_osm_raster == 51, 51, 
-                wc_data))))
+                xr.where(da_osm_raster == 53, 53,
+                  xr.where(da_osm_raster == 52, 52,
+                   xr.where(da_osm_raster == 51, 51, 
+                    xr.where(da_osm_raster == 80, 80, 
+                    wc_data)))))
     da_lc = da_lc.rio.write_crs(utm_epsg, inplace=True)
     
     return da_lc

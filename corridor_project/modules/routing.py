@@ -12,7 +12,7 @@ def create_resistance_surface(
     raster_da: xr.DataArray, 
     friction_dict: dict[int, float], 
     default_cost: float = 100.0
-    ) -> np.ndarray:
+    ) -> xr.DataArray:  
     """
     Traduit un raster d'occupation du sol en surface de coût pour MCP_Geometric.
 
@@ -26,8 +26,10 @@ def create_resistance_surface(
         default_cost (float)           : coût pour codes non définis (défaut 100)
 
     Returns:
-        np.ndarray float32 : surface de coût (np.inf pour barrières et hors-AOI)
+        DataArray : surface de coût (np.inf pour barrières et hors-AOI)
     """
+    
+    # 1. Création de la matrice de coût
     cost_matrix = np.full(raster_da.shape, default_cost, dtype=np.float32)
 
     for code, cost in friction_dict.items():
@@ -40,8 +42,20 @@ def create_resistance_surface(
     # Hors AOI (NaN ou 0 dans le raster) → imperméable
     cost_matrix[np.isnan(raster_da.values) | (raster_da.values == 0)] = np.inf
 
-    return cost_matrix
+    # 2. Conversion en xarray (Spatialisant le résultat)
+    resistance_da = xr.DataArray(
+        cost_matrix,
+        coords=raster_da.coords,
+        dims=raster_da.dims,
+        name="resistance_surface",
+        attrs=raster_da.attrs
+    )
     
+    # On force l'écriture du CRS pour être sûr qu'il est bien conservé
+    resistance_da = resistance_da.rio.write_crs(raster_da.rio.crs)
+    
+    return resistance_da
+
 def compute_lcp_network(
     corridors_gdf: gpd.GeoDataFrame, 
     nodes_df: gpd.GeoDataFrame,
@@ -60,10 +74,10 @@ def compute_lcp_network(
     Returns:
         gpd.GeoDataFrame: Real paths (LineString) with 'real_dist' and 'importance_score'.
     """
-    
+
     # 1. Setup cost surface and MCP solver
-    cost_matrix = create_resistance_surface(raster_da, friction_dict)
-    mcp = MCP_Geometric(cost_matrix)
+    resistance_da = create_resistance_surface(raster_da, friction_dict) 
+    mcp = MCP_Geometric(resistance_da.values) 
     affine_transform = raster_da.rio.transform()
     
     # 2. Pre-calculate patch masks (Vector to Raster coordinates)
@@ -80,7 +94,7 @@ def compute_lcp_network(
     lcp_results = []
     failed_links = 0
 
-    for _, row in tqdm(corridors_gdf.iterrows(), total=len(corridors_gdf), desc="Tracing LCPs"):
+    for _, row in tqdm(corridors_gdf.iterrows(), total=len(corridors_gdf), desc="Tracing LCPs", disable=True):
         u, v = int(row['node_1']), int(row['node_2'])
         
         if u not in patch_masks or v not in patch_masks:
