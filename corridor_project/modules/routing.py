@@ -82,7 +82,7 @@ def compute_lcp_network(
     
     # 2. Pre-calculate patch masks (Vector to Raster coordinates)
     patch_masks = {}
-    for idx, row in nodes_df.iterrows():
+    for idx, row in tqdm(nodes_df.iterrows(), total=len(nodes_df), desc="Rasterizing patches"):
         mask = features.rasterize([(row.geometry, 1)], 
                                   out_shape=raster_da.shape, 
                                   transform=affine_transform)
@@ -94,7 +94,7 @@ def compute_lcp_network(
     lcp_results = []
     failed_links = 0
 
-    for _, row in tqdm(corridors_gdf.iterrows(), total=len(corridors_gdf), desc="Tracing LCPs", disable=True):
+    for _, row in tqdm(corridors_gdf.iterrows(), total=len(corridors_gdf), desc="Tracing LCPs"):
         u, v = int(row['node_1']), int(row['node_2'])
         
         if u not in patch_masks or v not in patch_masks:
