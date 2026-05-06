@@ -60,7 +60,8 @@ def compute_lcp_network(
     corridors_gdf: gpd.GeoDataFrame, 
     nodes_df: gpd.GeoDataFrame,
     raster_da: xr.DataArray, 
-    friction_dict: Dict[int, float]
+    friction_dict: Dict[int, float],
+    max_cost_threshold: float = None
 ) -> gpd.GeoDataFrame:
     """
     Computes the Least Cost Path (LCP) between habitat patches.
@@ -91,57 +92,67 @@ def compute_lcp_network(
             patch_masks[idx] = coords
             
     # 3. Trace LCPs
-    lcp_results = []
-    failed_links = 0
+    all_paths = []
 
     for _, row in tqdm(corridors_gdf.iterrows(), total=len(corridors_gdf), desc="Tracing LCPs"):
         u, v = int(row['node_1']), int(row['node_2'])
         
-        if u not in patch_masks or v not in patch_masks:
-            failed_links += 1
-            continue
+        # Initialisation par défaut (échec)
+        path_data = {
+            'node_1': u, 'node_2': v,
+            'theoretical_dist': row['dist_m'],
+            'geometry': row['geometry'], # La ligne droite théorique
+            'status': 'failed',
+            'fail_reason': 'node_not_found', # Raison par défaut
+            'real_dist': np.nan,
+            'accumulated_cost': np.nan,
+            'efficiency': np.nan
+        }
+        
+        # Tentative de calcul
+        if u in patch_masks and v in patch_masks:
+            try:
+                starts, ends = patch_masks[u], patch_masks[v]
+                cumulative_costs, _ = mcp.find_costs(starts=starts, ends=ends)
+                costs_at_ends = cumulative_costs[ends[:, 0], ends[:, 1]]
 
-        try:
-            starts, ends = patch_masks[u], patch_masks[v]
-            
-            # Compute cumulative costs from all potential start pixels
-            cumulative_costs, _ = mcp.find_costs(starts=starts, ends=ends)
-            # Extract costs at destination pixels
-            costs_at_ends = cumulative_costs[ends[:, 0], ends[:, 1]]
-            # Connectivity check (threshold for unreachable areas)
-            if np.all(costs_at_ends >= 1e9):
-                failed_links += 1
-                continue
-            cost_at_end = np.min(costs_at_ends)
+                if np.all(costs_at_ends >= 1e9):
+                    path_data['fail_reason'] = 'uncrossable_barrier'
+                else:
+                    cost_at_end = np.min(costs_at_ends)
+                    best_end_idx = ends[np.argmin(costs_at_ends)]
+                    path_pixels = mcp.traceback(best_end_idx)
+                    path_coords = [affine_transform * (c, r) for r, c in path_pixels]
+                    
+                    if len(path_coords) >= 2:
+                        path_geom = LineString(path_coords)
+                        path_data.update({
+                            'real_dist': path_geom.length,
+                            'accumulated_cost': cost_at_end,
+                            'efficiency': path_geom.length / cost_at_end if cost_at_end > 0 else 0,
+                            'geometry': path_geom,
+                            'status': 'success',
+                            'fail_reason': None
+                        })
+            except Exception as e:
+                path_data['fail_reason'] = f'error: {str(e)}'
+        
+        all_paths.append(path_data)
 
-            # Identify best entry point in patch V and traceback
-            best_end_idx = ends[np.argmin(costs_at_ends)]
-            path_pixels = mcp.traceback(best_end_idx)
-            
-            path_coords = [affine_transform * (c, r) for r, c in path_pixels]
-            
-            if len(path_coords) >= 2:
-                path_geom = LineString(path_coords)
-                lcp_results.append({
-                    'node_1': u,
-                    'node_2': v,
-                    'theoretical_dist': row['dist_m'],
-                    'real_dist': path_geom.length,
-                    'accumulated_cost': cost_at_end,
-                    'efficiency': path_geom.length / cost_at_end if cost_at_end > 0 else 0, 
-                    'geometry': path_geom
-                })
-            
-        except Exception as e:
-            print(f"Critical error on link {u}-{v}: {e}")
-            raise e
-            
-    if not lcp_results:
-        print(f"Failure: No LCPs could be traced out of {len(corridors_gdf)} attempts.")
-        return gpd.GeoDataFrame(columns=['node_1', 'node_2', 'geometry'], crs=raster_da.rio.crs)
+    gdf_final = gpd.GeoDataFrame(all_paths, crs=raster_da.rio.crs)
 
-    print(f"Success: {len(lcp_results)} corridors traced ({failed_links} failed).")
-    return gpd.GeoDataFrame(lcp_results, crs=raster_da.rio.crs)
+    if max_cost_threshold is not None:
+        too_expensive_mask = (gdf_final['status'] == 'success') & \
+                             (gdf_final['accumulated_cost'] > max_cost_threshold)
+        gdf_final.loc[too_expensive_mask, 'status'] = 'failed'
+        gdf_final.loc[too_expensive_mask, 'fail_reason'] = 'cost_threshold_exceeded'
+        
+    success_count = len(gdf_final[gdf_final['status'] == 'success'])
+    print(f"Terminé: {success_count} success, {len(gdf_final) - success_count} failed.")
+    if 'fail_reason' in gdf_final.columns:
+        print(gdf_final[gdf_final['status'] == 'failed']['fail_reason'].value_counts())
+        
+    return gdf_final
 
 def calculate_tortuosity(lcp_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """

@@ -7,7 +7,9 @@ import sys
 sys.path.insert(1, '../../marion/corridor_project/config/')
 import species_params
 sys.path.insert(1, '../../marion/corridor_project/modules/')
+import importlib
 import landcover as lc
+importlib.reload(lc)
 import connectivity as conn
 import routing as rout
 
@@ -44,20 +46,20 @@ def sp_pipeline(guild_key, aoi_utm, da_lc, utm_epsg, aoi_raw, total_area_km2, CI
     resistance_raster = rout.create_resistance_surface(da_lc, specie['friction'])
     resistance_raster.rio.to_raster(f"{guild_dir}/friction_{guild_key}_{CITY}.tif")
 
-    gdf_lcp0 = rout.compute_lcp_network(gdf_edges, df_nodes, da_lc, specie['friction'])
-    gdf_lcp0['tortuosity'] = gdf_lcp0['real_dist'] / gdf_lcp0['theoretical_dist']
-    pc_real0, G_lcp0 = conn.calculate_pc_index_lcp(G=G, total_area_km2=total_area_km2, species_params=specie, gdf_lcp=gdf_lcp0)
+    gdf_lcp = rout.compute_lcp_network(gdf_edges, df_nodes, da_lc, specie['friction'])
+    # gdf_lcp0['tortuosity'] = gdf_lcp0['real_dist'] / gdf_lcp0['theoretical_dist']
+    # pc_real0, G_lcp0 = conn.calculate_pc_index_lcp(G=G, total_area_km2=total_area_km2, species_params=specie, gdf_lcp=gdf_lcp0)
 
     d0 = specie['graph']['d0']
     threshold = 3 * d0
-    gdf_lcp = gdf_lcp0[gdf_lcp0['accumulated_cost'] <= threshold].copy()
+    # gdf_lcp = gdf_lcp0[gdf_lcp0['accumulated_cost'] <= threshold].copy()
     gdf_lcp['tortuosity'] = gdf_lcp['real_dist'] / gdf_lcp['theoretical_dist']
     pc_real, G_lcp = conn.calculate_pc_index_lcp(G, total_area_km2, specie, gdf_lcp)
     
     # Metrics
-    gdf_lcp0 = conn.calculate_edge_dpc(gdf_lcp0, G_lcp0, total_area_km2, pc_real)
-    gdf_lcp0 = conn.calculate_edge_betweenness(gdf_lcp0, G_lcp0)
-    gdf_lcp0 = conn.classify_corridors(gdf_lcp0, 0.75)
+    # gdf_lcp0 = conn.calculate_edge_dpc(gdf_lcp0, G_lcp0, total_area_km2, pc_real)
+    # gdf_lcp0 = conn.calculate_edge_betweenness(gdf_lcp0, G_lcp0)
+    # gdf_lcp0 = conn.classify_corridors(gdf_lcp0, 0.75)
     
     gdf_lcp = conn.calculate_edge_dpc(gdf_lcp, G_lcp, total_area_km2, pc_real)
     gdf_lcp = conn.calculate_edge_betweenness(gdf_lcp, G_lcp)

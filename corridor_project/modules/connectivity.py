@@ -584,7 +584,6 @@ def lcp_heatmap(gdf_lcp: gpd.GeoDataFrame, aoi_utm: gpd.GeoDataFrame, res: int =
     
     return da_heatmap
 
-
 # def get_priority_corridors_ebc(
 #     G: nx.Graph, 
 #     crs: Any, 

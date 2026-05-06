@@ -72,15 +72,29 @@ def get_city_landcover(
         aoi_raw.geometry.union_all(), 
         tags={"highway": accepted_highways, "railway": ["rail", "tram"], "building": True, "natural": ["water"], "landuse": ["reservoir"]}
     )
-
+            
     osm_proj = osm_features.to_crs(utm_epsg)
+
+    for col in ['highway', 'railway', 'building', 'natural', 'landuse']:
+        if col not in osm_proj.columns:
+            osm_proj[col] = None
+
+    has_highway = 'highway' in osm_proj.columns and osm_proj['highway'].notna().any()
+    has_railway = 'railway' in osm_proj.columns and osm_proj['railway'].notna().any()
     
-    lines = osm_proj[(osm_proj['highway'].notna() | osm_proj['railway'].notna()) & (osm_proj.geometry.type.isin(['LineString', 'MultiLineString']))].copy()
-    buildings = osm_proj[osm_proj['building'].notna()].copy()
+    mask_lines = (
+        ((osm_proj.get('highway').notna() if has_highway else False) | 
+         (osm_proj.get('railway').notna() if has_railway else False))
+        & (osm_proj.geometry.type.isin(['LineString', 'MultiLineString']))
+    )
+    lines = osm_proj[mask_lines].copy()
+
+    buildings = osm_proj[osm_proj['building'].notna()].copy() if 'building' in osm_proj.columns and osm_proj['building'].notna().any() else gpd.GeoDataFrame(columns=['geometry', 'wc_code'], crs=utm_epsg)
+
     waterways = osm_proj[
-    ((osm_proj['natural'] == 'water') | (osm_proj['landuse'] == 'reservoir')) 
-    & (osm_proj.geometry.type.isin(['Polygon', 'MultiPolygon']))
-].copy()
+        ((osm_proj['natural'] == 'water') | (osm_proj['landuse'] == 'reservoir')) & 
+        (osm_proj.geometry.type.isin(['Polygon', 'MultiPolygon']))
+    ].copy()
 
     widths: Dict[str, int] = {
         'motorway': 30, 'motorway_link': 30, 'rail': 30, 
@@ -113,7 +127,13 @@ def get_city_landcover(
 
     waterways['wc_code'] = 80
 
+    for df in [waterways, buildings, lines]:
+        if 'wc_code' not in df.columns:
+            df['wc_code'] = 0
     all_features = pd.concat([waterways, buildings, lines])
+    if all_features.empty:
+        return wc_data
+        
     custom_order = [80, 51, 52, 53, 54] 
     
     all_features['wc_order'] = pd.Categorical(
