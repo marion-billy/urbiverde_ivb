@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import networkx as nx
 from sklearn.neighbors import BallTree
 from shapely.geometry import LineString, Point
-from shapely.ops import nearest_points
+from shapely.ops import nearest_points, unary_union, linemerge
 from typing import Optional, Union, Any, List, Union, Tuple
 sys.path.insert(1, '../../Hugo/a_b_c_functions/spatial_analysis/')
 from utils_raster import raster_to_polygon
@@ -406,7 +406,10 @@ def calculate_pc_index_lcp(G: nx.Graph, total_area_km2: float, species_params: d
             edge_key = tuple(sorted((u, v)))
             acc_cost = lcp_lookup.get(edge_key)
             if acc_cost is not None:
-                cost_log = acc_cost / d0
+                if np.isnan(acc_cost) or np.isinf(acc_cost):
+                    cost_log = 999999 # Coût prohibitif si erreur de données
+                else:
+                    cost_log = max(0.0, acc_cost / d0)
                 prob = np.exp(-cost_log)
                 G_curr[u][v].update({'accumulated_cost': acc_cost, 'prob': prob, 'cost_log': cost_log})
                 
@@ -498,91 +501,227 @@ def classify_corridors(gdf_lcp: gpd.GeoDataFrame, q: float = 0.5) -> gpd.GeoData
     gdf_lcp['category'] = gdf_lcp.apply(_classify, axis=1)
     return gdf_lcp
 
-def calculate_node_dpc(G_lcp: nx.Graph, total_area_km2: float, species_params: dict) -> pd.DataFrame:
+def calculate_node_betweenness(df_nodes: gpd.GeoDataFrame, G_curr: nx.Graph, aoi_gdf: gpd.GeoDataFrame = None) -> gpd.GeoDataFrame:
     """
-    Calcule spécifiquement la fraction 'Connector' du dPC pour chaque nœud.
+    Calcule la Node Betweenness Centrality (NBC) pour chaque réservoir d'habitat.
+    Identifie les patchs qui agissent comme hubs écologiques.
+    Permet un filtrage sur l'AOI pour une normalisation locale.
     """
-    # 1. Calcul du PC de référence (Réseau complet)
-    pc_ref, _ = calculate_pc_index_lcp(G_lcp, total_area_km2, species_params)
-    nodes = list(G_lcp.nodes())
-    results = []
-
-    print(f"Analyse de connectivité pour {len(nodes)} noyaux...")
-    for node_i in tqdm(nodes, desc="Calcul dPC Nodes", unit="node"):
-        # A. Fraction Intra : Importance de la surface propre (ai * ai)
-        a_i = G_lcp.nodes[node_i]['area'] / 100
-        dpc_intra = (a_i * a_i) / (total_area_km2**2)
+    df = df_nodes.copy()
+    
+    # 1. Calcul via NetworkX sur tout le graphe (Buffer inclus)
+    node_centrality = nx.betweenness_centrality(G_curr, weight='cost_log', normalized=True)
+    
+    # 2. Assignation des scores bruts 
+    df['nbc_score_raw'] = df.index.map(lambda node_id: node_centrality.get(node_id, 0))
+    
+    # 3. Filtrage spatial : On ne garde que les noeuds dans l'AOI (si fourni)
+    if aoi_gdf is not None:
+        df = gpd.sjoin(df, aoi_gdf[['geometry']], how='inner', predicate='intersects')
+        df = df.drop(columns=['index_right'], errors='ignore')
         
-        # B. Calcul du PC sans le noeud i pour isoler le reste
-        G_temp = G_lcp.copy()
-        G_temp.remove_node(node_i)
-
-
-        pc_res = calculate_pc_index_lcp(G_temp, total_area_km2, species_params)
-        pc_minus_i = pc_res[0] if isinstance(pc_res, tuple) else pc_res
+    # 4. Normalisation de 0 à 100 (aoi city)
+    max_score = df['nbc_score_raw'].max()
+    if max_score > 0:
+        df['nbc_score'] = (df['nbc_score_raw'] / max_score) * 100
+    else:
+        df['nbc_score'] = 0
+    df = df.drop(columns=['nbc_score_raw'])
         
-        # C. dPC Total de ce noeud
-        dpc_total = pc_ref - pc_minus_i
-        
-        # D. Calcul du Flux (contribution aux chemins où i est source ou destination)
-        # Dans la pratique, on simplifie souvent : Connector = Total - Intra - Flux
-        # Mais mathématiquement, le Connector est le rôle de "relais" entre j et k via i
-        
-        # Pour isoler le Connector pur : 
-        # C'est la part du PC qui s'effondre car i servait de pont entre d'autres noeuds
-        dpc_connector = max(0, dpc_total - dpc_intra) # Simplification courante (Flux inclus souvent dans le résiduel)
-        
-        results.append({
-            'node_id': node_i,
-            'area_ha': G_lcp.nodes[node_i]['area'],
-            'dPC_total': (dpc_total / pc_ref) * 100,
-            'dPC_connector': (dpc_connector / pc_ref) * 100
-        })
+    return df.sort_values(by='nbc_score', ascending=False)
 
-    return pd.DataFrame(results).sort_values('dPC_connector', ascending=False)
-
-def lcp_heatmap(gdf_lcp: gpd.GeoDataFrame, aoi_utm: gpd.GeoDataFrame, res: int = 10, crs_utm: str = None) -> xr.DataArray:
+def calculate_pinch_points_network(gdf_lcp: gpd.GeoDataFrame, G_curr: nx.Graph) -> gpd.GeoDataFrame:
     """
-    Génère une heatmap de densité des chemins LCP.
-    Chaque pixel contient le nombre de chemins qui le traversent.
-    
-    Args:
-        gdf_lcp: GeoDataFrame des chemins (LCP).
-        aoi_utm: GeoDataFrame de la zone d'étude (pour cadrer le raster).
-        res: Résolution spatiale en mètres (par défaut 10m).
-        crs_utm
+    Calcule les Pinch Points (Goulots d'étranglement) via la théorie des circuits (Current-Flow).
+    Équivalent vectoriel de Circuitscape.
     """
-    
-    # 1. Création du template vide (Image de référence)
-    da_ref = create_img_reference(aoi_utm, spatial_resolution=res, output_crs=crs_utm)
-    
-    # 2. Alignement des données
-    gdf_lcp_utm = gdf_lcp.to_crs(da_ref.rio.crs)
-    
-    # 3. Préparation des formes pour la rasterisation
-    # On attribue la valeur 1 à chaque géométrie
-    shapes = [(geom, 1) for geom in gdf_lcp_utm.geometry if geom is not None]
+    df = gdf_lcp.copy()
+    edge_current_flow = {}
 
-    # 4. Rasterisation par accumulation 
-    heatmap_arr = features.rasterize(
-        shapes=shapes,
-        out_shape=(da_ref.rio.height, da_ref.rio.width),
-        transform=da_ref.rio.transform(),
-        fill=0,
-        all_touched=True, 
-        merge_alg=MergeAlg.add,
-        dtype='uint32'
+    G_clean = G_curr.copy()
+
+    # 1. Supprimer les liens avec une probabilité nulle ou quasi-nulle pour l'inversion de matrice
+    edges_to_remove = [(u, v) for u, v, d in G_clean.edges(data=True) if d.get('prob', 0) <= 1e-12]
+    G_clean.remove_edges_from(edges_to_remove)
+    
+    # 2. Itération sur les composantes connectées du graphe 
+    for comp in nx.connected_components(G_clean):
+        subgraph = G_clean.subgraph(comp)
+        
+        # Il faut au moins 2 noeuds pour qu'un courant circule
+        if len(subgraph.nodes) > 1:
+            try:
+                flows = nx.edge_current_flow_betweenness_centrality(
+                    subgraph, 
+                    weight='prob', 
+                    normalized=True,
+                    solver='lu' 
+                )
+                edge_current_flow.update(flows)
+            except Exception as e:
+                # micro-composante: avertissement 
+                print(f" Ignoré: Composante de {len(subgraph.nodes)} noeuds ({e})")
+
+    # 3. Extraire score
+    def get_current_flow(row):
+        u, v = int(row['node_1']), int(row['node_2'])
+        return edge_current_flow.get((u, v)) or edge_current_flow.get((v, u), 0)
+
+    # 4. Assigner score
+    df['pinch_point_score'] = df.apply(get_current_flow, axis=1)
+    
+    # 5. Normalisation de 0 à 100
+    max_score = df['pinch_point_score'].max()
+    if max_score > 0:
+        df['pinch_point_score'] = (df['pinch_point_score'] / max_score) * 100
+    else:
+        df['pinch_point_score'] = 0
+        
+    return df
+
+# def calculate_node_dpc(G_lcp: nx.Graph, total_area_km2: float, species_params: dict) -> pd.DataFrame:
+#     """
+#     Calcule spécifiquement la fraction 'Connector' du dPC pour chaque nœud.
+#     """
+#     # 1. Calcul du PC de référence (Réseau complet)
+#     pc_ref, _ = calculate_pc_index_lcp(G_lcp, total_area_km2, species_params)
+#     nodes = list(G_lcp.nodes())
+#     results = []
+
+#     print(f"Analyse de connectivité pour {len(nodes)} noyaux...")
+#     for node_i in tqdm(nodes, desc="Calcul dPC Nodes", unit="node"):
+#         # A. Fraction Intra : Importance de la surface propre (ai * ai)
+#         a_i = G_lcp.nodes[node_i]['area'] / 100
+#         dpc_intra = (a_i * a_i) / (total_area_km2**2)
+        
+#         # B. Calcul du PC sans le noeud i pour isoler le reste
+#         G_temp = G_lcp.copy()
+#         G_temp.remove_node(node_i)
+
+
+#         pc_res = calculate_pc_index_lcp(G_temp, total_area_km2, species_params)
+#         pc_minus_i = pc_res[0] if isinstance(pc_res, tuple) else pc_res
+        
+#         # C. dPC Total de ce noeud
+#         dpc_total = pc_ref - pc_minus_i
+        
+#         # D. Calcul du Flux (contribution aux chemins où i est source ou destination)
+#         # Dans la pratique, on simplifie souvent : Connector = Total - Intra - Flux
+#         # Mais mathématiquement, le Connector est le rôle de "relais" entre j et k via i
+        
+#         # Pour isoler le Connector pur : 
+#         # C'est la part du PC qui s'effondre car i servait de pont entre d'autres noeuds
+#         dpc_connector = max(0, dpc_total - dpc_intra) # Simplification courante (Flux inclus souvent dans le résiduel)
+        
+#         results.append({
+#             'node_id': node_i,
+#             'area_ha': G_lcp.nodes[node_i]['area'],
+#             'dPC_total': (dpc_total / pc_ref) * 100,
+#             'dPC_connector': (dpc_connector / pc_ref) * 100
+#         })
+
+#     return pd.DataFrame(results).sort_values('dPC_connector', ascending=False)
+
+def create_urban_planning_segments(gdf_lcp, df_nodes, tolerance=0.1):
+    """
+    Transforme les corridors LCP en segments d'aménagement urbain uniques.
+    - Gommage des parties dans les habitats
+    - Découpage topologique aux intersections
+    - Agrégation des scores (dPC, EBC, Pinch Point)
+    - Nettoyage des micro-segments
+    """
+    # 1. Nettoyage des corridors (Gommage habitats)
+    habitats_union = df_nodes.geometry.union_all()
+    gdf_matrix = gdf_lcp.copy()
+    gdf_matrix['geometry'] = gdf_matrix.geometry.difference(habitats_union)
+    gdf_matrix = gdf_matrix[~gdf_matrix.geometry.is_empty].copy()
+
+    # 2. Découpage topologique et création des segments
+    # Éclatement aux intersections
+    merged = unary_union(gdf_matrix.geometry.tolist())
+    if hasattr(merged, 'geoms'):
+        lines = [g for g in merged.geoms if g.geom_type == 'LineString']
+        for mg in [g for g in merged.geoms if g.geom_type == 'MultiLineString']:
+            lines.extend(list(mg.geoms))
+    else:
+        lines = [merged]
+
+    gdf_segments = gpd.GeoDataFrame(geometry=lines, crs=gdf_lcp.crs)
+    gdf_segments['segment_id'] = range(len(gdf_segments))
+
+    # 3. Agrégation spatiale des métriques (dPC, EBC, Pinch Point)
+    # Jointure avec buffer pour éviter les erreurs de précision
+    gdf_seg_buf = gdf_segments.copy()
+    gdf_seg_buf.geometry = gdf_segments.geometry.buffer(tolerance)
+    join_df = gpd.sjoin(gdf_seg_buf, gdf_matrix, how='left', predicate='intersects')
+
+    metrics = join_df.groupby('segment_id').agg(
+        corridor_count=('node_1', 'count'),
+        sum_dPC=('dPC_val', 'sum'),
+        max_ebc=('ebc_score', 'max'),
+        max_pinch_point=('pinch_point_score', 'max')
+    ).reset_index()
+    gdf_final = gdf_segments.merge(metrics, on='segment_id')
+
+    # 4. Soudure des segments
+    # Arrondi pour éviter les micro-écarts de float
+    for col in ['sum_dPC', 'max_ebc', 'max_pinch_point']:
+        gdf_final[f'grp_{col[:3]}'] = gdf_final[col].round(6)
+    gdf_clean = gdf_final.dissolve(by=['corridor_count', 'sum_dPC', 'max_ebc', 'max_pinch_point']).reset_index()
+    
+    gdf_clean['geometry'] = gdf_clean['geometry'].apply(
+        lambda g: linemerge(g) if g.geom_type == 'MultiLineString' else g
     )
-
-    # 5. Conversion en DataArray
-    da_heatmap = xr.DataArray(
-        heatmap_arr,
-        coords={"y": da_ref.y, "x": da_ref.x},
-        dims=("y", "x"),
-        name="lcp_density"
-    ).rio.write_crs(da_ref.rio.crs)
+    gdf_clean = gdf_clean.explode(index_parts=False).reset_index(drop=True)
     
-    return da_heatmap
+    cols_to_drop = [c for c in gdf_clean.columns if 'grp_' in c]
+    gdf_clean = gdf_clean.drop(columns=cols_to_drop + ['segment_id'], errors='ignore')
+    gdf_clean['segment_id'] = range(len(gdf_clean))
+
+    return gdf_clean
+    
+# def lcp_heatmap(gdf_lcp: gpd.GeoDataFrame, aoi_utm: gpd.GeoDataFrame, res: int = 10, crs_utm: str = None) -> xr.DataArray:
+#     """
+#     Génère une heatmap de densité des chemins LCP.
+#     Chaque pixel contient le nombre de chemins qui le traversent.
+    
+#     Args:
+#         gdf_lcp: GeoDataFrame des chemins (LCP).
+#         aoi_utm: GeoDataFrame de la zone d'étude (pour cadrer le raster).
+#         res: Résolution spatiale en mètres (par défaut 10m).
+#         crs_utm
+#     """
+    
+#     # 1. Création du template vide (Image de référence)
+#     da_ref = create_img_reference(aoi_utm, spatial_resolution=res, output_crs=crs_utm)
+    
+#     # 2. Alignement des données
+#     gdf_lcp_utm = gdf_lcp.to_crs(da_ref.rio.crs)
+    
+#     # 3. Préparation des formes pour la rasterisation
+#     # On attribue la valeur 1 à chaque géométrie
+#     shapes = [(geom, 1) for geom in gdf_lcp_utm.geometry if geom is not None]
+
+#     # 4. Rasterisation par accumulation 
+#     heatmap_arr = features.rasterize(
+#         shapes=shapes,
+#         out_shape=(da_ref.rio.height, da_ref.rio.width),
+#         transform=da_ref.rio.transform(),
+#         fill=0,
+#         all_touched=True, 
+#         merge_alg=MergeAlg.add,
+#         dtype='uint32'
+#     )
+
+#     # 5. Conversion en DataArray
+#     da_heatmap = xr.DataArray(
+#         heatmap_arr,
+#         coords={"y": da_ref.y, "x": da_ref.x},
+#         dims=("y", "x"),
+#         name="lcp_density"
+#     ).rio.write_crs(da_ref.rio.crs)
+    
+#     return da_heatmap
 
 # def get_priority_corridors_ebc(
 #     G: nx.Graph, 

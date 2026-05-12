@@ -3,9 +3,33 @@ import matplotlib.pyplot as plt
 import geopandas as gpd
 import matplotlib.lines as mlines
 import matplotlib.patches as mpatches
+import matplotlib.colors as mcolors
 import matplotlib.colors as colors
 from matplotlib.ticker import ScalarFormatter
 from scipy import ndimage
+import numpy as np
+
+def plot_resistance_surface(resistance_raster, aoi_utm):
+    fig, ax = plt.subplots(figsize=(14, 12))
+    
+    # On prépare une copie pour l'affichage (remplacer inf par une valeur haute mais finie pour le plot)
+    plot_data = resistance_raster.where(resistance_raster != np.inf, resistance_raster.max() * 1.2)
+    
+    im = plot_data.plot(
+        ax=ax,
+        robust=True, 
+        cmap='RdYlGn_r', 
+        add_labels=False,
+        cbar_kwargs={'label': 'Coût de déplacement (friction)'}
+    )
+
+    aoi_utm.plot(ax=ax, facecolor="none", edgecolor='black', alpha=0.6, linewidth=2)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_title("Surface de Résistance (Coût de friction)", fontsize=12)
+    ax.set_axis_off()
+    plt.tight_layout()
+    plt.show()
 
 def plot_connectivity_ruptures(gdf_lcp, aoi_utm, df_nodes):
     """
@@ -20,7 +44,8 @@ def plot_connectivity_ruptures(gdf_lcp, aoi_utm, df_nodes):
     G_success = nx.from_pandas_edgelist(gdf_success, 'node_1', 'node_2')
     G_success.add_nodes_from(df_nodes.index) # Garantit que tous les habitats sont inclus
     isolated_nodes_list = list(nx.isolates(G_success))
-    isolated_nodes_gdf = df_nodes[df_nodes.index.isin(isolated_nodes_list)]
+    all_isolated_nodes = df_nodes[df_nodes.index.isin(isolated_nodes_list)]
+    isolated_nodes_gdf = all_isolated_nodes[all_isolated_nodes.geometry.intersects(aoi_utm.unary_union)]
     
     # 3. Préparation de la carte
     fig, ax = plt.subplots(figsize=(14, 12))
@@ -86,59 +111,106 @@ def plot_classified_corridors(gdf_lcp: gpd.GeoDataFrame, df_nodes: gpd.GeoDataFr
     ax.set_axis_off()
     plt.tight_layout()
     plt.show()
-
-def plot_connectivity_heatmap(da_heatmap, df_nodes, aoi_utm, filter_size=3):
-    """
-    Génère et affiche la heatmap de connectivité avec les réservoirs superposés.
     
-    Args:
-        da_heatmap (xr.DataArray): La heatmap de densité LCP.
-        df_nodes (gpd.GeoDataFrame): Les réservoirs/nœuds de biodiversité.
-        aoi_utm (gpd.GeoDataFrame): La limite de la zone d'étude.
-        filter_size (int): Taille du filtre maximum pour épaissir les corridors.
+def plot_segment_metric(gdf_lcp: gpd.GeoDataFrame, df_nodes: gpd.GeoDataFrame, aoi_utm: gpd.GeoDataFrame, 
+                        score_col='corridor_count', 
+                        cmap_name='plasma', 
+                        title="", 
+                        cbar_label=""):
     """
-    # 1. Préparation de la heatmap (Épaississement visuel)
-    dilated_data = ndimage.maximum_filter(da_heatmap.values, size=filter_size) 
-    da_heatmap_thick = da_heatmap.copy(data=dilated_data)
-    heatmap_plot = da_heatmap_thick.where(da_heatmap_thick > 0)
-
-    # 2. Configuration du graphique
+    Génère une carte de chaleur vectorielle dynamique pour n'importe quelle métrique.
+    L'épaisseur et la couleur s'adaptent automatiquement au maximum de la colonne choisie.
+    """
     fig, ax = plt.subplots(figsize=(14, 12))
-    fig.patch.set_facecolor('#2d2d2d') 
-    ax.set_facecolor('#2d2d2d')
+    aoi_utm.plot(ax=ax, color='#f8f9fa', edgecolor='#ced4da', zorder=1)
 
-    # 3. Affichage des Réservoirs et Islets (Zorder 1)
-    if df_nodes.crs is None:
-        df_nodes.set_crs(aoi_utm.crs, inplace=True)
-    # Reprojection vers le système de coordonnées de la heatmap
-    nodes_to_plot = df_nodes.to_crs(da_heatmap.rio.crs)
+    # Réservoirs d'habitat 
+    df_nodes.plot(ax=ax, color='#206c2c', alpha=0.6, zorder=2)
 
-    nodes_to_plot.plot(ax=ax, color='#206c2c', alpha=0.6, edgecolor='none', linewidth=0.5, markersize=20, zorder=1)
+    # Préparation des données
+    gdf_plot = gdf_lcp[gdf_lcp[score_col] > 0].sort_values(by=score_col, ascending=True)
+    vmax_val = gdf_plot[score_col].max()
 
-    # 4. Affichage de la Heatmap (Zorder 2)
-    vmax = int(da_heatmap_thick.max())
-    mappable = heatmap_plot.plot(
-        ax=ax,
-        cmap='inferno', 
-        norm=colors.LogNorm(vmin=1, vmax=vmax),
-        add_colorbar=True,
-        add_labels=False,
-        zorder=2,
-        cbar_kwargs={
-            'label': 'Nombre de passages',
-            'format': ScalarFormatter(),
-            'ticks': [1, 2, 5, 10, vmax]
-        }
-    )
+    cmap = plt.cm.get_cmap(cmap_name)
+    norm = mcolors.Normalize(vmin=0, vmax=vmax_val)
 
-    cbar = mappable.colorbar
-    cbar.ax.tick_params(axis='y', colors='white')
-    cbar.set_label('Nombre de passages', color='white')
-    for label in cbar.ax.yaxis.get_ticklabels():
-        label.set_color('white')
+    for idx, row in gdf_plot.iterrows():
+        score = row[score_col]
+        geom = row['geometry']
+        ratio = score / vmax_val
+        lw = 1.5 + (ratio**2) * 8
+        color = cmap(norm(score))
+        
+        gpd.GeoSeries([geom]).plot(ax=ax, color=color, linewidth=lw, alpha=0.8, zorder=3)
 
-    # 5. Habillage (Zorder 3)
-    aoi_utm.plot(ax=ax, facecolor="none", edgecolor='white', alpha=0.6, linewidth=2, zorder=3)
+    # Barre de légende
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax, shrink=0.5, pad=0.02)
+    cbar.set_label(cbar_label, color='black', fontsize=12, labelpad=10)
+    cbar.ax.yaxis.set_tick_params(color='black', labelcolor='black')
+
+    aoi_utm.plot(ax=ax, facecolor="none", edgecolor='black', alpha=0.3, linewidth=1, zorder=4)
+    plt.title(title, color='black', fontsize=18, pad=20)
     ax.set_axis_off()
     plt.tight_layout()
     plt.show()
+    
+# def plot_connectivity_heatmap(da_heatmap, df_nodes, aoi_utm):
+#     """
+#     Génère et affiche la heatmap de connectivité avec les réservoirs superposés.
+    
+#     Args:
+#         da_heatmap (xr.DataArray): La heatmap de densité LCP.
+#         df_nodes (gpd.GeoDataFrame): Les réservoirs/nœuds de biodiversité.
+#         aoi_utm (gpd.GeoDataFrame): La limite de la zone d'étude.
+#     """
+#     # 1. Préparation de la heatmap (Épaississement visuel)
+#     data = da_heatmap.values.astype(float)
+#     vmax_abs = data.max()
+#     mask = data >= 1
+#     dist_map = ndimage.distance_transform_edt(~mask)
+#     max_intensity_map = ndimage.maximum_filter(data, size=8)
+#     ratio = max_intensity_map / vmax_abs
+#     variable_width_threshold = 1 + (ratio**2 * 7) # px min px max
+#     continuous_thick = np.where(dist_map <= variable_width_threshold, max_intensity_map, 0)
+#     da_heatmap_thick = da_heatmap.copy(data=continuous_thick)
+#     heatmap_plot = da_heatmap_thick.where(da_heatmap_thick >= 1)
+
+#     # 2. Configuration du graphique
+#     fig, ax = plt.subplots(figsize=(14, 12))
+#     # fig.patch.set_facecolor('#2d2d2d') 
+#     # ax.set_facecolor('#2d2d2d')
+    
+#     # 3. Affichage des Réservoirs et Islets 
+#     if df_nodes.crs is None:
+#         df_nodes.set_crs(aoi_utm.crs, inplace=True)
+#     nodes_to_plot = df_nodes.to_crs(da_heatmap.rio.crs)
+#     nodes_to_plot.plot(ax=ax, color='#206c2c', alpha=0.6, edgecolor='none', zorder=1)
+#     aoi_utm.plot(ax=ax, facecolor="none", edgecolor='black', alpha=0.6, linewidth=2, zorder=2)
+
+#     # 4. Affichage de la Heatmap 
+#     mappable = heatmap_plot.plot(
+#         ax=ax,
+#         cmap='plasma', 
+#         norm=colors.Normalize(vmin=1, vmax=vmax_abs),
+#         add_colorbar=True,
+#         add_labels=False,
+#         zorder=3,
+#         cbar_kwargs={
+#             'label': 'Nombre de passages',
+#             'format': ScalarFormatter(),
+#             'ticks': [1, 2, 5, 10, int(vmax_abs)]
+#         }
+#     )
+
+#     cbar = mappable.colorbar
+#     cbar.ax.tick_params(axis='y', colors='black')
+#     cbar.set_label('Nombre de passages', color='black')
+#     for label in cbar.ax.yaxis.get_ticklabels():
+#         label.set_color('black')
+
+#     # 5. Habillage 
+#     ax.set_axis_off()
+#     plt.tight_layout()
+#     plt.show()
