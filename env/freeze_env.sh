@@ -32,7 +32,12 @@ echo "=== 2. versions des bibliotheques effectivement importees ==="
 # Liste tenue a la main : correspond aux imports de utils/*.py. La mettre a jour si un
 # import est ajoute a la chaine.
 $PY - > "$OUT/env_report.txt" <<'PYEOF'
-import importlib, platform, subprocess, sys
+import importlib, os, platform, subprocess, sys
+
+# smoothify est vendu dans ./libs et n'est pas installe dans l'environnement : sans cet ajout au
+# chemin de recherche, il serait rapporte comme absent alors que la chaine l'utilise bien.
+sys.path.insert(1, os.path.join(os.path.dirname(os.path.abspath("env")), "libs"))
+sys.path.insert(1, "libs")
 
 MODULES = [
     "numpy", "pandas", "scipy", "networkx", "shapely", "geopandas", "xarray", "rioxarray",
