@@ -920,3 +920,30 @@ Reworked `data/outputs/README.md` (English, canonical) and created a synced `dat
   considered relevant"; the stale failed_links caveat removed; friction described as specific to each
   ecological profile.
 - 0 em dash verified throughout both files.
+
+## 2026-08-30 (Marion) -- Test de déterminisme : sorties identiques octet par octet
+
+Partie D du protocole de validation (`papier/internship_report/validation_protocol.md`), prévue de
+longue date et jamais exécutée jusqu'ici. Deux exécutions successives et indépendantes de Perpignan,
+quatre profils écologiques, avec `--lc-cache` pour figer l'instantané d'entrée :
+
+    python3 utils/run_pipeline.py Perpignan --lc-cache --out-tag det1
+    python3 utils/run_pipeline.py Perpignan --lc-cache --out-tag det2
+
+Résultat : les deux jeux portent les mêmes fichiers, et `diff -r` ne relève aucune différence, soit
+une identité **octet par octet** sur toutes les couches (rasters `.tif`, vecteurs `.geojson`) ; les
+`stats_*.csv` des quatre profils ont en outre été comparés un à un et sont identiques. Le
+déterminisme de la chaîne est donc établi. `[Certain]`
+
+Portée et réserve. Le déterminisme vaut **à entrées identiques**. `--lc-cache` est indispensable au
+test : sans lui, chaque exécution réinterroge OpenStreetMap, base vivante modifiée quotidiennement,
+et un écart viendrait de l'entrée et non de la chaîne. OSM n'exposant pas de version citable, c'est
+`data/lc_cache/<Ville>_<tampon>/` qui archive l'instantané réellement utilisé et rend la chaîne
+rejouable par un tiers : il doit être diffusé avec les sorties.
+
+Point de vigilance pour la suite : le manifeste d'exécution prévu (`suivi/reproductibilite.md`, §4)
+contiendra un horodatage et cassera l'identité octet par octet. Une fois ajouté, la comparaison
+devra l'exclure (`diff -r -x 'manifest_*.json'`).
+
+Report : §2.5 du rapport, le `[À COMPLÉTER]` est remplacé par le résultat. Jeux `det1` / `det2`
+supprimés après contrôle.

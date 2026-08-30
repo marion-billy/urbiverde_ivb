@@ -38,39 +38,68 @@ est défendable, contrairement à des commits rétrodatés.
 
 ### 1.1. Synchroniser le dépôt avec l'état livré
 
-**Débloque** : §2.5 et §5.3 (passation).  **Coût** : 30 min.
+**Débloque** : §2.5 et §5.3 (passation).  **Coût** : 30 min.  Procédure suivie le 2026-08-30.
+
+Le dépôt est initialisé **dans** le dossier de travail, puis rattaché à l'historique distant sans
+que les fichiers soient touchés. Aucune commande ci-dessous ne modifie le répertoire de travail.
 
 ```bash
-# 1. Récupérer le dépôt existant à côté du projet (ne pas écraser la copie de travail)
-cd /home/jovyan/work/team/marion
-git clone https://github.com/marion-billy/urbiverde_ivb.git urbiverde_ivb_sync
-cd urbiverde_ivb_sync
-git log --oneline | head            # voir où le dépôt s'était arrêté
+cd /home/jovyan/work/team/marion/corridor_project
 
-# 2. Reporter le .gitignore, puis l'état livré (le .gitignore filtre data/, caches, clé GEE)
-cp ../corridor_project/.gitignore .
-rsync -a --exclude-from=<(git ls-files --others --ignored --exclude-standard -z | tr '\0' '\n') \
-      ../corridor_project/ .   2>/dev/null || rsync -a ../corridor_project/ .
+# 1. Dépôt local et rattachement au distant
+git init
+git config user.name  "Marion Billy"
+git config user.email "<prenom.nom@murmuration-sas.com>"
+git remote add origin https://github.com/marion-billy/urbiverde_ivb.git
+git fetch origin
+git log --oneline origin/HEAD | head     # où le dépôt s'était arrêté
+git branch -r                            # nom de la branche : main ou master
 
-# 3. Retirer les sorties des notebooks avant de commiter (images embarquées)
+BR=main                                  # adapter si besoin
+
+# 2. Ancrer l'historique SANS toucher aux fichiers
+git reset --soft origin/$BR
+
+# 3. Retirer les sorties des notebooks (images embarquées)
 pip install nbstripout && nbstripout *.ipynb
 
-# 4. Vérifier le périmètre AVANT de commiter
+# 4. CONTRÔLE avant de commiter
 git add -A
-git status --short | wc -l                       # ordre de grandeur : la centaine de fichiers
-git diff --cached --name-only | grep -iE "\.tif$|\.geojson$|credential|gee.*\.json" \
-  && echo "STOP : donnée ou secret sur le point d'être commité" || echo "périmètre propre"
+git status --short | wc -l               # ordre de grandeur : la centaine de fichiers
+git diff --cached --name-only | grep -iE '\.tif$|\.geojson$|credential|gee.*\.json' \
+  && echo ">>> STOP : donnée ou secret indexé" || echo ">>> périmètre propre"
+du -sh .git                              # doit rester de l'ordre de quelques Mo
 
-# 5. Commit daté du jour, annoncé comme une synchronisation
-git commit -m "Synchronisation de l'état livré en fin de stage
+# 5. Commit : message passé par l'entrée standard, pour éviter tout piège de guillemets
+git commit -F - <<'EOF'
+Synchronisation de l'etat livre en fin de stage
 
-Chaîne complète (utils/), tests, configuration des profils écologiques,
-documentation de suivi et sources du rapport. Le dépôt n'ayant pas été tenu au
-fil du développement, ce commit reporte l'état final ; l'historique des décisions
-est dans suivi/decision_log.md. Sorties (data/, 116 Go) diffusées séparément."
-git tag -a v1.0-stage -m "État livré en fin de stage (14 août 2026)"
-git push && git push --tags
+Chaine complete (utils/), tests, configuration des profils ecologiques,
+documentation de suivi et sources du rapport. Le depot n'ayant pas ete tenu
+au fil du developpement, ce commit reporte l'etat final ; l'historique des
+decisions est dans suivi/decision_log.md. Sorties (data/, 116 Go) diffusees
+separement.
+EOF
+
+# 6. Étiquette et publication
+BR=$(git rev-parse --abbrev-ref HEAD)
+git tag -a v1.0-stage -m "Etat livre en fin de stage (14 aout 2026)"
+git push -u origin "$BR"
+git push --tags
+
+# 7. Confirmer que c'est arrivé
+git fetch origin && git log --oneline -1 "origin/$BR"
+git ls-remote --tags origin | grep v1.0-stage
 ```
+
+**Ne jamais lancer `git checkout .`, `git reset --hard` ni `git clean` dans ce dossier** : ce sont
+les seules commandes qui pourraient écraser le travail. Les étapes ci-dessus sont non destructrices.
+
+Deux pièges rencontrés. Un `git commit -m "..."` sur plusieurs lignes laisse le shell en attente du
+guillemet fermant et avale les commandes suivantes dans le message : d'où le `-F -` avec document
+en ligne. Et GitHub n'accepte plus le mot de passe : il faut un jeton personnel à portée
+`Contents: read and write`, saisi à la place du mot de passe (`git config credential.helper store`
+pour ne le fournir qu'une fois).
 
 - [ ] dépôt synchronisé, commit et étiquette poussés
 - [x] URL du dépôt reportée en §2.5 (appliquée le 2026-08-29)
@@ -101,15 +130,32 @@ la moins chère.  **Coût** : ~35 min machine sur Perpignan.
 
 ```bash
 export PYTHONPATH=/opt/conda/lib/python3.11/site-packages
-python3 utils/run_pipeline.py Perpignan --lc-cache --out-tag det_run1
-python3 utils/run_pipeline.py Perpignan --lc-cache --out-tag det_run2
+bash restore_env.sh                       # si le conteneur a redémarré
+ls -la data/lc_cache/Perpignan_6000/      # l'instantané d'entrée doit exister
 
-A=data/sensitivity/det_run1/data/outputs/Perpignan
-B=data/sensitivity/det_run2/data/outputs/Perpignan
-diff -r "$A" "$B" && echo "DÉTERMINISME : sorties identiques"
-find "$A" -type f | sort | xargs md5sum > /tmp/run1.md5
-sed "s|det_run1|det_run2|g" /tmp/run1.md5 | md5sum -c - | grep -c OK
+python3 utils/run_pipeline.py Perpignan --lc-cache --out-tag det1
+python3 utils/run_pipeline.py Perpignan --lc-cache --out-tag det2
+
+A=data/sensitivity/det1/data/outputs/Perpignan
+B=data/sensitivity/det2/data/outputs/Perpignan
+
+# 1. mêmes fichiers produits
+diff <(cd "$A" && find . -type f | sort) <(cd "$B" && find . -type f | sort)
+
+# 2. identité octet par octet
+diff -r "$A" "$B" && echo "DÉTERMINISME : sorties identiques octet par octet"
+
+# 3. contrôle ciblé des indicateurs
+for p in ground_mammal arboreal_mammal forest_edge_bird ground_reptile; do
+  diff -q "$A/$p/stats_${p}_Perpignan.csv" "$B/$p/stats_${p}_Perpignan.csv" >/dev/null \
+    && echo "  $p : indicateurs identiques" || echo "  $p : INDICATEURS DIFFÉRENTS"
+done
+
+rm -rf data/sensitivity/det1 data/sensitivity/det2   # ~700 Mo, après relevé du résultat
 ```
+
+**Résultat obtenu le 2026-08-30** : les trois niveaux sont passés, identité octet par octet sur
+toutes les couches et indicateurs identiques pour les quatre profils (cf. `decision_log.md`).
 
 **`--lc-cache` est indispensable** : sans lui chaque exécution réinterroge OpenStreetMap, base
 vivante modifiée quotidiennement, et les sorties diffèrent pour une raison d'entrée et non de
@@ -118,9 +164,9 @@ et `data/lc_cache/<Ville>_<tampon>/` est précisément l'archive de l'instantan�
 chaîne rejouable. Diffuser ce cache avec les sorties est ce qui permet à un tiers de reproduire les
 résultats exactement, plutôt qu'approximativement.
 
-- [ ] test lancé, résultat (identique / écarts) consigné dans `decision_log.md`
+- [x] test lancé le 2026-08-30 : identité octet par octet, consigné dans `decision_log.md`
 - [x] phrase ajoutée en §2.5 (déterminisme à instantané archivé)
-- [ ] y remplacer le `[À COMPLÉTER : résultat du test de déterminisme]` par le résultat réel
+- [x] `[À COMPLÉTER]` du §2.5 remplacé par le résultat
 
 ## 4. Manifeste d'exécution
 
@@ -168,6 +214,8 @@ sorties.  **Coût** : ~25 lignes dans `utils/sp_pipeline.py`, à insérer juste 
 ```
 
 À documenter ensuite dans `data/outputs/README.md` (le fichier passe à 14 par couple).
+
+**Attention** : l'horodatage du manifeste cassera l'identité octet par octet du test §3. Une fois le manifeste en place, la comparaison devra l'exclure (`diff -r -x 'manifest_*.json'`).
 
 - [ ] manifeste ajouté et vérifié sur un couple
 - [ ] README des sorties mis à jour
