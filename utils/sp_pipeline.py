@@ -367,6 +367,57 @@ def sp_pipeline(
     "islets_in_aoi": int((nodes_in_aoi['node_type'] == 'islet').sum()),
 }
 
+    # Manifeste d'exécution : empreinte du code, de l'environnement et des paramètres qui ont
+    # produit ce jeu de sorties, pour que chaque dossier soit vérifiable a posteriori sans
+    # dépendre d'un journal externe. Le fichier porte un horodatage : l'exclure d'un test de
+    # reproductibilité octet par octet (diff -r -x 'manifest_*.json').
+    import datetime
+    import json
+    import platform
+    import subprocess
+
+    def _git(*args: str) -> "str | None":
+        """Retourne la sortie d'une commande git dans le dépôt, ou None hors dépôt."""
+        try:
+            return subprocess.run(["git", *args], cwd=str(paths.project_root),
+                                  capture_output=True, text=True, check=True).stdout.strip()
+        except Exception:
+            return None
+
+    def _version(mod: str) -> "str | None":
+        try:
+            return __import__(mod).__version__
+        except Exception:
+            return None
+
+    manifest = {
+        "generated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "city": CITY,
+        "ecoprofil": ecoprofil_key,
+        "crs": str(utmb_epsg),
+        "git_commit": _git("rev-parse", "HEAD"),
+        "git_dirty": bool(_git("status", "--porcelain")),
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "params": {
+            "d0_m": d0,
+            "aoi_buffer_m": 2 * d0,
+            "habitat_codes": specie["habitat_codes"],
+            "friction": {str(k): (None if pd.isna(v) else float(v))
+                         for k, v in specie["friction"].items()},
+            "friction_avg_favorable": spp.FRICTION_AVG_FAVORABLE,
+            "cost_budget": threshold,
+            "core_min_ha": 1.0,
+            "islet_min_ha": 0.1,
+            "subnetwork_min_patches": 3,
+        },
+        "packages": {m: _version(m) for m in
+                     ("numpy", "pandas", "geopandas", "shapely", "rasterio",
+                      "xarray", "rioxarray", "networkx", "skimage", "scipy")},
+    }
+    with open(f"{ecoprofil_dir}/manifest_{ecoprofil_key}_{CITY}.json", "w", encoding="utf-8") as _fh:
+        json.dump(manifest, _fh, indent=2, ensure_ascii=False)
+
     pd.DataFrame([stats]).to_csv(paths.stats_csv(ecoprofil_key), index=False)
 
     # World read/write on the produced files: the Jupyter kernel runs as root, so without

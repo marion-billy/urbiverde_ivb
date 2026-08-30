@@ -101,7 +101,7 @@ en ligne. Et GitHub n'accepte plus le mot de passe : il faut un jeton personnel 
 `Contents: read and write`, saisi à la place du mot de passe (`git config credential.helper store`
 pour ne le fournir qu'une fois).
 
-- [ ] dépôt synchronisé, commit et étiquette poussés
+- [x] dépôt synchronisé, commit et étiquette poussés (2026-08-30)
 - [x] URL du dépôt reportée en §2.5 (appliquée le 2026-08-29)
 
 ## 2. Figer l'environnement
@@ -245,16 +245,30 @@ python3 -m pytest tests/ -q            # ou : python3 tests/test_pipeline_extra.
 
 | Source | Version / millésime | Date d'acquisition | Accès |
 |---|---|---|---|
-| ESA WorldCover | v200 (millésime 2021) | [à compléter : date des runs] | Earth Engine, `ESA/WorldCover/v200` |
-| OpenStreetMap | instantané via Overpass | [à compléter : dates, cf. `data/lc_cache/`] | OSMnx, cache `data/cache/` |
-| GBIF | requêtes API REST | [à compléter, cf. `_sandbox/gbif_validation/`] | `api.gbif.org/v1/occurrence/search` |
-| Limites administratives | geo.api.gouv.fr / OSM | [à compléter] | URLs dans `CITY_CONFIG` |
+| ESA WorldCover | v200, millésime 2021, 10 m | extrait à chaque exécution ; jeux de référence produits le 2026-07-06 | Earth Engine, collection `ESA/WorldCover/v200` |
+| OpenStreetMap | instantané Overpass, sans version citable | réponses mises en cache entre le 2026-05-04 et le 2026-08-26 (90 réponses dans `data/cache/`) | OSMnx / Overpass |
+| Instantané d'entrée archivé | WorldCover + OSM par (territoire, tampon) | les six territoires, le 2026-08-30 | `data/lc_cache/<Ville>_<tampon>/` |
+| GBIF | occurrences, filtres : observations humaines, 2016-2026, incertitude <= 100 m | extractions du 2026-07-07 | API REST `api.gbif.org/v1/occurrence/search` |
+| Limites administratives | contours communaux et intercommunaux | idem exécutions | `geo.api.gouv.fr` (Perpignan, Nancy, La Roche-sur-Yon, La Rochelle), OSM (Toulouse), emprise rectangulaire (Kourou) |
+
+Les vingt-quatre jeux de référence du rapport ont tous été produits le **2026-07-06**, à la suite de
+la refonte des indicateurs de connectivité datée du même jour (cf. `decision_log.md`).
+
+**Limite à connaître.** L'archive a été constituée le 2026-08-30, soit après les jeux de référence
+du 2026-07-06. Elle fige donc l'état d'OpenStreetMap à cette date, et non celui de juillet, qui n'a
+pas été conservé : une exécution partant de l'archive reproduit fidèlement la chaîne, mais ne
+redonne pas exactement les chiffres publiés. L'écart mesuré sur Perpignan est faible en surface
+d'habitat (0,1 %) et plus marqué sur la topologie du réseau, le tissu cartographié dans OSM s'étant
+densifié depuis mai. C'est le comportement attendu d'une chaîne assise sur une base vivante, et
+c'est précisément ce qui justifie l'archivage pour les exécutions à venir.
 
 OSM n'a pas de version citable : l'instantané effectivement utilisé est celui archivé dans
 `data/lc_cache/`. Pour GBIF, une requête API n'a pas de DOI ; si une citation stable est voulue,
 refaire un téléchargement via l'interface GBIF, qui en attribue un.
 
-- [ ] tableau rempli et repris en annexe A
+- [x] tableau rempli le 2026-08-30 (dates relevées sur les fichiers produits)
+- [ ] repris en annexe A du rapport
+- [ ] décider si le `lc_cache` des quatre territoires manquants est constitué (état courant du réseau, pas celui de juillet)
 
 ## 7. Après le dépôt : industrialisation
 
