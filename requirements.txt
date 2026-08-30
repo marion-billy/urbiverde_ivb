@@ -1,0 +1,3 @@
+# corridor_project extra runtime dep (installed into ./libs on the NFS volume)
+# pip install -r requirements.txt --no-deps --target=libs
+smoothify==0.2.3

@@ -1,14 +1,77 @@
-# Sécurité : ne jamais uploader les clés
+# =============================================================================
+# corridor_project - .gitignore
+# Principe : le depot porte le CODE, la CONFIGURATION et la DOCUMENTATION
+# (~2 Mo). Les donnees produites (data/ = 116 Go) et les caches sont diffuses
+# separement (archive / stockage objet), pas versionnes.
+# =============================================================================
+
+# --- Secrets : jamais dans le depot ------------------------------------------
+# La cle de compte de service Earth Engine est lue via $GEE_KEY_PATH.
 credentials/
-*.json
+*credential*.json
+*service-account*.json
+gee*.json
+*.pem
+*.key
+.env
 
-# Notebooks et caches
-.ipynb_checkpoints/
-**/cache/
+# --- Donnees et caches (volumineux, regenerables) ----------------------------
+# Git n'applique pas les negations sous un dossier exclu en bloc : on exclut le CONTENU
+# (data/*) puis on reouvre selectivement la documentation et les tableaux de synthese,
+# qui sont du livrable et pesent quelques kilo-octets.
+data/*
+!data/outputs/
+data/outputs/*
+!data/outputs/README.md
+!data/outputs/README_FR.md
+!data/outputs/species_params.csv
+!data/outputs/pipeline.mmd
+!data/outputs/pipeline.png
+!data/sensitivity/
+data/sensitivity/*
+!data/sensitivity/sensitivity_annexe.md
+!data/sensitivity/sensitivity_summary.csv
+!data/sensitivity/grid3x3_anova.csv
+!data/sensitivity/grid5x5_anova.csv
+
+cache/
+lc_cache/
+
+# --- Sorties de travail exploratoire -----------------------------------------
+_sandbox/logs/
+_sandbox/gbif_validation/cache/
+_sandbox/figures_sens/
+_sandbox/__pycache__/
+_sandbox/*.log
+_sandbox/*.out
+_sandbox/*.flag
+
+# --- Artefacts Python --------------------------------------------------------
 __pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
 
-# Données volumineuses (optionnel mais conseillé)
-**/results_connectivity/
-*.tif
-*.geojson
-*.gpkg
+# --- Notebooks : versionner le code, pas les sorties -------------------------
+# Passer nbstripout avant commit (voir suivi/reproductibilite.md).
+# Les checkpoints Jupyter sont deja exclus ci-dessus.
+
+# --- Rapport : sources versionnees, binaires lourds exclus ------------------
+papier/**/*.docx
+papier/**/*.pptx
+papier/**/*.xlsx
+papier/**/*.zip
+papier/litterature/*.pdf
+papier/internship_report/rapport_complet.pdf
+papier/internship_report/_tectonic.log
+papier/internship_report/*.bak
+papier/internship_report/*.bak2
+
+# --- Divers ------------------------------------------------------------------
+.nfs*
+.DS_Store
+Thumbs.db
+*.tmp

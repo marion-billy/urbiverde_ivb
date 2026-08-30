@@ -1,0 +1,7 @@
+city,guild,output,n_cells,ref,pct_d0,pct_contrast,pct_interaction
+LaRochelle,ground_reptile,n_subnetworks,25,14.0,29.7,58.2,12.1
+Toulouse,ground_reptile,n_subnetworks,25,8.0,34.5,44.5,21.0
+Nancy,ground_reptile,n_subnetworks,25,7.0,27.3,62.9,9.7
+LaRochelle,ground_reptile,connected_habitat_pct,25,33.5,7.4,92.1,0.5
+Toulouse,ground_reptile,connected_habitat_pct,25,8.6,8.1,86.9,4.9
+Nancy,ground_reptile,connected_habitat_pct,25,23.2,8.8,86.6,4.5
