@@ -74,3 +74,9 @@ papier/internship_report/*.bak2
 Thumbs.db
 *.tmp
 papier/internship_report/rapport.pdf
+
+# --- Kept on disk but out of the repo (internship deliverables, tracking, scratch, notebooks) ---
+papier/
+suivi/
+_sandbox/
+/*.ipynb
