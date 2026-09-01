@@ -9,10 +9,10 @@ Conteneur éphémère : les paquets pip hors image de base sont effacés au red�
 redémarrage :
 
 ```bash
-bash restore_env.sh        # réinstalle osmnx (requis) + python-docx/xhtml2pdf (build du rapport)
+bash restore_env.sh        # réinstalle osmnx (requis pour la chaîne)
 ```
 
-Deux points d'environnement à connaître (voir §5) :
+Deux points d'environnement à connaître (voir la section Reproductibilité) :
 - **Earth Engine** : la chaîne lit une clé de compte de service (`$GEE_KEY_PATH`, sinon la clé
   partagée `marion/credentials/*.json`). Sans elle, le téléchargement WorldCover échoue.
 - **urllib3** : lancer avec `PYTHONPATH=/opt/conda/lib/python3.11/site-packages` pour éviter le fork
@@ -31,7 +31,7 @@ python3 utils/run_pipeline.py <Ville> [--ecoprofil <profil>]
 - `--ecoprofil` : `ground_mammal` | `ground_reptile` | `arboreal_mammal` | `forest_edge_bird`
   (omis = les quatre). Défini dans `utils/species_params.py`.
 - Options d'analyse de sensibilité : `--d0-scale`, `--friction-scale [--friction-class]`,
-  `--friction-contrast`, avec `--out-tag <tag>` pour écrire sous `data/sensitivity/<tag>/`.
+  `--friction-contrast`, avec `--out-tag <tag>` pour écrire sous `_sandbox/sensitivity/<tag>/`.
 - Mode scénario d'aménagement : `--project <polygone.geojson>`.
 
 Une même commande régénère l'ensemble des sorties d'un territoire (chaîne déterministe).

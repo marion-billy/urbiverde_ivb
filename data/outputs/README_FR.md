@@ -14,7 +14,7 @@ Pour chaque ville, le paysage est modélisé comme un graphe de taches d'habitat
 outputs/<Ville>/<profil>/<artefact>_<profil>_<Ville>.<ext>
 ```
 
-Un dossier `<profil>/` par couple (ville, profil écologique), avec les fichiers décrits en section 4 (jusqu'à 14).
+Un dossier `<profil>/` par couple (ville, profil écologique), avec les fichiers décrits ci-dessous (jusqu'à 12).
 
 > **Scénarios d'aménagement.** Un scénario teste l'effet d'un projet : on fournit un polygone de projet (zone à végétaliser, piétonniser, etc.), la chaîne le brûle dans l'occupation du sol, puis recalcule toute la connectivité. Sur l'emprise du polygone, la classe dessinée écrase toutes les couches (WorldCover remplacé, infrastructure OSM découpée à l'intérieur), si bien qu'une avenue végétalisée devient entièrement de l'habitat, et non une route bordée de verdure. Les sorties ont la même structure que les sorties de base, mais dans `data/scenarios/<Ville>/<slug-du-projet>/<profil>/`, produites par `run_pipeline.py --project`.
 
@@ -193,7 +193,7 @@ Par (ville, profil écologique) : construire l'occupation du sol du profil (Worl
 
 - **QGIS / ArcGIS** : glisser les `.geojson` et `.tif` (régler le CRS du projet sur l'UTM de la ville).
 - **Python** : `geopandas.read_file(...)` pour les vecteurs, `rioxarray.open_rasterio(...)` pour les rasters.
-- **Comparer avec vos propres résultats** : aligner sur la même définition de profil écologique (codes habitat + `d0` en section 2), les mêmes codes d'occupation du sol (section 3), et le même CRS. Le PC est un indice relatif : comparer des écarts / classements plutôt que des valeurs absolues.
+- **Comparer avec vos propres résultats** : aligner sur la même définition de profil écologique (codes habitat + `d0` sous *Profils écologiques*), les mêmes codes d'occupation du sol (sous *Codes d'occupation du sol*), et le même CRS. Le PC est un indice relatif : comparer des écarts / classements plutôt que des valeurs absolues.
 
 ---
 

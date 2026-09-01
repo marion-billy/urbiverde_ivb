@@ -14,7 +14,7 @@ For each city we model the landscape as a graph of habitat patches, connect them
 outputs/<City>/<profile>/<artefact>_<profile>_<City>.<ext>
 ```
 
-One `<profile>/` folder per (city, ecological profile), with the files described in section 4 (up to 14).
+One `<profile>/` folder per (city, ecological profile), with the files described below (up to 12).
 
 > **Planning scenarios.** A scenario tests a project's effect: you supply a project polygon (the area to vegetalize, pedestrianize, etc.), the chain burns it into the land cover, then recomputes all the connectivity. On the footprint, the drawn class overrides every layer (WorldCover replaced, OSM infrastructure clipped out inside), so a vegetalized avenue fully becomes habitat, not a road lined with greenery. Outputs have the same structure as the baseline ones, but under `data/scenarios/<City>/<project-slug>/<profile>/`, produced by `run_pipeline.py --project`.
 
@@ -197,7 +197,7 @@ Per (city, ecological profile): build the ecological profile land cover (WorldCo
 
 - **Python**: `geopandas.read_file(...)` for vectors, `rioxarray.open_rasterio(...)` for rasters.
 
-- **Comparing with your own results**: align on the same ecological profile definition (habitat codes + `d0` in section 2), the same land-cover codes (section 3), and the same CRS. PC is a relative index, so compare deltas / rankings rather than absolute values.
+- **Comparing with your own results**: align on the same ecological profile definition (habitat codes + `d0` under *Ecological profiles*), the same land-cover codes (under *Land-cover codes*), and the same CRS. PC is a relative index, so compare deltas / rankings rather than absolute values.
 
 ---
 
