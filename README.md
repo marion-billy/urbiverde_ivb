@@ -1,9 +1,7 @@
 # Corridor project : chaîne de connectivité écologique urbaine (UrbiVerde)
 
 Chaîne Python qui identifie les continuités écologiques urbaines potentielles à partir de données
-ouvertes (ESA WorldCover 10 m + OpenStreetMap), par profil écologique. Pour la méthode et les
-résultats, voir `papier/internship_report/`. Ce README est le point d'entrée de **passation** : comment
-installer, lancer, ce qui entre et ce qui sort, et les limites de reprise connues.
+ouvertes (ESA WorldCover 10 m + OpenStreetMap), par profil écologique. 
 
 ## 1. Installation
 
@@ -50,7 +48,7 @@ Une même commande régénère l'ensemble des sorties d'un territoire (chaîne d
 
 Par couple (ville, profil), une arborescence normalisée : rasters `landcover_*`, `binary_habitat_*`,
 `friction_*`, `dispersal_*` (.tif) ; couches vectorielles `edges_*` (nœuds/graphe), `lcp_*` (corridors),
-`failed_links_*`, `rupture_points_*`, `corridor_segments_*` (.geojson) ; `stats_*.csv` (indicateurs).
+`failed_links_*`, `corridor_segments_*` (.geojson) ; `stats_*.csv` (indicateurs).
 Tous en projection métrique locale, directement exploitables en SIG et par le tableau de bord.
 
 ## 5. Reproductibilité et dettes connues (à lever pour l'industrialisation)
@@ -68,17 +66,31 @@ frictions) du reste ; un profil se modifie sans toucher à la chaîne.
 
 ## 6. Tests
 
+Douze tests de non-régression portent sur les fonctions dont le résultat se vérifie à la main.
+Ils complètent le contrôle automatisé des sorties (`utils/output_check.py`) : le premier vérifie que
+les fonctions calculent ce qu'elles annoncent, le second que les sorties produites sont conformes.
+
 ```bash
 export PYTHONPATH=/opt/conda/lib/python3.11/site-packages
-python3 tests/test_pipeline.py          # ou : python3 -m pytest tests/ -q  (si pytest installé)
+python3 _sandbox/pipeline_tests/test_pipeline.py
+python3 _sandbox/pipeline_tests/test_pipeline_extra.py
+# ou, si pytest est installé :  python3 -m pytest _sandbox/pipeline_tests/ -q
 ```
 
-Tests de non-régression sur les fonctions pures (état au dernier lancement) :
+**État au dernier lancement : 12 / 12 conformes**, le 2026-08-30, sous Python 3.11.15 sur la machine
+de traitement.
 
-| Fonction | Jeu de test | Attendu | Observé | Environnement |
-|---|---|---|---|---|
-| `get_binary_habitat` | raster jouet {10, 20, 50, NaN}, codes habitat {10, 20} | {1, 1, 0, 0}, dtype uint8 | conforme | local |
-| `calculate_tortuosity` | (réel, théorique) = (100, 100), (150, 100), (5, 0) | 1.0 ; 1.5 ; NaN (pas inf) | conforme | local |
-
-À compléter : indice PC sur un graphe jouet, seuils MSPA, profilage petite ville vs grande ville
-(chiffres au chapitre 6 du rapport).
+| Fonction ou invariant | Jeu de test | Attendu |
+|---|---|---|
+| `get_binary_habitat` | raster {10, 20, 50, NaN}, habitat {10, 20} | {1, 1, 0, 0}, dtype uint8 |
+| `calculate_tortuosity` | (réel, théorique) = (100, 100), (150, 100), (5, 0) | 1,0 ; 1,5 ; NaN (pas inf) |
+| `create_resistance_surface` | codes {10, 20, 51, 0}, friction {10: 1, 20: 2, 51: NaN} | 1 ; 2 ; inf (barrière) ; inf (hors emprise) |
+| `create_resistance_surface`, coût par défaut | code 40 absent du dictionnaire | 100, et non une barrière |
+| `fast_mspa`, tache compacte | bloc de 5 × 5 pixels | cœur 9 px, lisière 16 px, aucun îlot |
+| `fast_mspa`, tache filiforme | ligne de 1 × 5 pixels | aucun cœur, 5 px classés îlot |
+| `calculate_pc_index`, taches reliées | 2 taches de 100 ha, coût ln 2, zone de 2 km² | 0,75 |
+| `calculate_pc_index`, taches isolées | les mêmes, sans lien | 0,50 |
+| `graph_to_gdf_edges` | taches jointives, points d'ancrage confondus | segment valide de 1 mm, pas de géométrie dégénérée |
+| Calibration : habitat | les 4 profils écologiques | tout code d'habitat a une friction ≤ 3 et n'est jamais une barrière |
+| Calibration : barrières | les 4 profils écologiques | {51, 80} ; {51} ; aucune ; {51, 80} |
+| Calibration : dispersion | les 4 profils écologiques | d₀ de 3000, 2000, 1500 et 750 m ; budget = 3 × d₀ |

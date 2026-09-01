@@ -92,7 +92,13 @@ def sp_pipeline(
     specie = spp.SPECIES_CONFIG[ecoprofil_key]
     # Centralized, typed paths. Derive the project root from the legacy OUTPUT_DIR
     # (= <root>/data/outputs/<CITY>), so the notebook callers stay unchanged.
-    paths = CorridorPaths(CITY, project_root=PurePosixPath(OUTPUT_DIR).parents[2])
+    # OUTPUT_DIR is always the city's output directory in every mode (baseline, scenario,
+    # sensitivity). Pass it as an explicit city_dir so all layer paths derive from it directly,
+    # instead of reconstructing it via parents[2] + the fixed data/outputs prefix (which forced
+    # sensitivity runs into an extra data/outputs level). project_root is kept for the incidental
+    # base dirs (chmod), and no longer dictates the city output layout.
+    paths = CorridorPaths(CITY, project_root=PurePosixPath(OUTPUT_DIR).parents[2],
+                          city_dir=PurePosixPath(OUTPUT_DIR))
     ecoprofil_dir = paths.init_ecoprofil(ecoprofil_key)
     
     # 2. Ecoprofil-specific processing
@@ -217,9 +223,11 @@ def sp_pipeline(
         # links cross no obstacle (obstacle='' / 0); only blocked links carry ruptures.
         gdf_lcp_city_failed = conn.enrich_failed_links_with_ruptures(gdf_lcp_city_failed, gdf_ruptures)
         gdf_lcp_city_failed.to_file(str(paths.failed_links_geojson(ecoprofil_key)), driver='GeoJSON')
-    # Rupture points as their own layer (points where a blocked link crosses its obstacle).
-    if gdf_ruptures is not None and not gdf_ruptures.empty:
-        gdf_ruptures.to_file(str(paths.rupture_points_geojson(ecoprofil_key)), driver='GeoJSON')
+    # Rupture-points layer retired: the rupture info now lives on failed_links (obstacle /
+    # n_ruptures, enriched above). gdf_ruptures is still computed for that enrichment; the
+    # standalone rupture_points_*.geojson layer is no longer written.
+    # if gdf_ruptures is not None and not gdf_ruptures.empty:
+    #     gdf_ruptures.to_file(str(paths.rupture_points_geojson(ecoprofil_key)), driver='GeoJSON')
 
     G_success = nx.from_pandas_edgelist(gdf_lcp_city, 'node_1', 'node_2')
     G_success.add_nodes_from(df_nodes.index) # Add all study nodes
@@ -228,8 +236,11 @@ def sp_pipeline(
     # A node with any part outside the AOI must not be flagged isolated (it is a boundary/buffer
     # patch, not a city patch). Use 'within' (fully inside) instead of 'intersects'.
     df_isolated_nodes_city = df_isolated_nodes[df_isolated_nodes.geometry.within(aoi_utm.union_all())].copy()
-    if not df_isolated_nodes_city.empty:
-            df_isolated_nodes_city.to_file(str(paths.isolated_nodes_geojson(ecoprofil_key)), driver='GeoJSON')
+    # isolated_nodes layer retired: the count is still kept as the isolated_nodes_count KPI
+    # (df_isolated_nodes_city is computed above and used in stats), but the standalone
+    # isolated_nodes_*.geojson layer is no longer written.
+    # if not df_isolated_nodes_city.empty:
+    #         df_isolated_nodes_city.to_file(str(paths.isolated_nodes_geojson(ecoprofil_key)), driver='GeoJSON')
     
     # Tortuosity = realized length / straight-line length. Degenerate corridors (near-adjacent
     # patches whose theoretical_dist ~ 0) blow up to inf; exclude them from the statistic (NaN).

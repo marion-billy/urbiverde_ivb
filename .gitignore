@@ -25,8 +25,6 @@ data/outputs/*
 !data/outputs/README.md
 !data/outputs/README_FR.md
 !data/outputs/species_params.csv
-!data/outputs/pipeline.mmd
-!data/outputs/pipeline.png
 !data/sensitivity/
 data/sensitivity/*
 !data/sensitivity/sensitivity_annexe.md
@@ -75,3 +73,4 @@ papier/internship_report/*.bak2
 .DS_Store
 Thumbs.db
 *.tmp
+papier/internship_report/rapport.pdf

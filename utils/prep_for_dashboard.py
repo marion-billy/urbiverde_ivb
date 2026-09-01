@@ -604,15 +604,18 @@ def prep_one_pair(
     # connection to any other patch (graph degree 0). Rendered with a
     # diagonal-hatch overlay on top of the regular node fill so the user
     # can spot them at a glance.
-    src_isolated = ecoprofil_in / f"isolated_nodes_{ecoprofil}_{city_name}.geojson"
-    if src_isolated.exists():
-        print(f"  Preparing isolated nodes (clipping to AOI)...")
-        n_isolated = prep_isolated_nodes(
-            src_isolated, ecoprofil_dir / "isolated.geojson", aoi_wgs,
-        )
-        print(f"    -> {n_isolated} isolated patches")
-    else:
-        print(f"  No isolated-nodes file at {src_isolated.name}, skipping (optional).")
+    # isolated_nodes layer retired (no longer produced by the pipeline): the isolated-node
+    # info is kept only as the isolated_nodes_count KPI in stats. prep_isolated_nodes stays
+    # for backward compatibility but is no longer called.
+    # src_isolated = ecoprofil_in / f"isolated_nodes_{ecoprofil}_{city_name}.geojson"
+    # if src_isolated.exists():
+    #     print(f"  Preparing isolated nodes (clipping to AOI)...")
+    #     n_isolated = prep_isolated_nodes(
+    #         src_isolated, ecoprofil_dir / "isolated.geojson", aoi_wgs,
+    #     )
+    #     print(f"    -> {n_isolated} isolated patches")
+    # else:
+    #     print(f"  No isolated-nodes file at {src_isolated.name}, skipping (optional).")
 
     # Rupture points layer removed: the rupture info now lives on the barriers
     # (obstacle / n_ruptures), so no standalone ruptures layer is prepared. The

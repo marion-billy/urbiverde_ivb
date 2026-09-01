@@ -37,9 +37,14 @@ class CorridorPaths:
         self,
         city: str,
         project_root: Union[str, PurePosixPath] = DEFAULT_PROJECT_ROOT,
+        city_dir: Union[str, PurePosixPath, None] = None,
     ) -> None:
         self.city = city
         self.project_root = PurePosixPath(project_root)
+        # Optional explicit output dir for the city. When set, it overrides the default
+        # `<project_root>/data/outputs/<CITY>` layout (used e.g. by sensitivity runs, which
+        # write a flat `_sandbox/sensitivity/<tag>/<CITY>/` instead of an extra data/outputs level).
+        self._city_dir_override = PurePosixPath(city_dir) if city_dir is not None else None
 
     # -- base dirs ----------------------------------------------------------
 
@@ -65,7 +70,9 @@ class CorridorPaths:
 
     @property
     def city_dir(self) -> PurePosixPath:
-        """`data/outputs/<CITY>` (the legacy ``OUTPUT_DIR``)."""
+        """`data/outputs/<CITY>` (the legacy ``OUTPUT_DIR``), or an explicit override."""
+        if self._city_dir_override is not None:
+            return self._city_dir_override
         return self.outputs / self.city
 
     def ecoprofil_dir(self, ecoprofil: str) -> PurePosixPath:

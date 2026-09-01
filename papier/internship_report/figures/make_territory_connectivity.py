@@ -34,10 +34,10 @@ TERR = {
 }
 # profile key -> (display, colour)
 PROF = [
-    ("ground_mammal", "Petit mammifère terrestre", "#2E7D32"),
-    ("arboreal_mammal", "Mammifère arboricole", "#8D6E63"),
-    ("forest_edge_bird", "Oiseau de lisière", "#1565C0"),
-    ("ground_reptile", "Reptile terrestre", "#F5A623"),
+    ("ground_mammal", "Profil hérisson", "#CC79A7"),
+    ("arboreal_mammal", "Profil écureuil", "#D55E00"),
+    ("forest_edge_bird", "Profil fauvette", "#0072B2"),
+    ("ground_reptile", "Profil lézard", "#5D3A9B"),
 ]
 
 
@@ -51,11 +51,14 @@ def stat(city: str, prof: str, field: str) -> float | None:
 
 
 def main() -> None:
-    # total vegetated cover per territory (ground_mammal habitat = trees+shrub+grass)
+    # Ordering axis: share of trees + shrubs + grassland, which is exactly the
+    # ground_mammal habitat. It is a general vegetation gradient, NOT the habitat of
+    # each profile -- the reptile (grass + bare ground) follows a different order, so
+    # the axis is named for what it measures, not "vegetation cover" in general.
     cover = {k: stat(k, "ground_mammal", "habitat_coverage_pct") for k in TERR}
     order = sorted(TERR, key=lambda k: cover[k] if cover[k] is not None else 0)
 
-    fig, ax = plt.subplots(figsize=(11, 5.5))
+    fig, ax = plt.subplots(figsize=(8.0, 4.2))
     n_prof = len(PROF)
     width = 0.19
     x = np.arange(len(order))
@@ -69,15 +72,13 @@ def main() -> None:
     for xi, k in zip(x, order):
         c = cover[k]
         if c is not None:
-            ax.text(xi, ymax * 0.97, f"couvert végétal {c:.0f} %", ha="center", va="top",
-                    fontsize=8.5, color="#455A64", style="italic")
+            ax.text(xi, ymax * 0.985, f"{c:.0f} %", ha="center", va="top",
+                    fontsize=15, fontweight="bold", color="#7A8B95")
 
     ax.set_xticks(x)
     ax.set_xticklabels([TERR[k] for k in order], fontsize=10)
     ax.set_ylabel("Part d'habitat fonctionnellement connecté (%)", fontsize=10)
     ax.set_ylim(0, ymax)
-    ax.set_title("Connectivité par territoire et par profil écologique\n"
-                 "(territoires classés par couverture végétale croissante)", fontsize=11)
     ax.legend(fontsize=9, ncol=4, loc="upper center", bbox_to_anchor=(0.5, -0.09),
               framealpha=0.9, frameon=False)
     ax.grid(axis="y", linestyle=":", alpha=0.5)

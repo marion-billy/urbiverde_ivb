@@ -1,6 +1,6 @@
 """Sensitivity-analysis metrics for the connectivity pipeline.
 
-Compares a perturbed run (friction / d0 scaled, produced under data/sensitivity/<tag>/) to the
+Compares a perturbed run (friction / d0 scaled, produced under _sandbox/sensitivity/<tag>/) to the
 reference run (data/outputs/), per (city, ecoprofil), and quantifies how much the CONCLUSIONS move:
 corridor overlap, blocked-link Jaccard, and relative KPI change. Also a tornado plot per KPI.
 
@@ -10,7 +10,7 @@ connectivity model (Beier 2008, Spear 2010, Zeller 2012, Rayfield 2011).
 
 Usage (after the perturbed runs exist):
     from sensitivity_metrics import stability_table, tornado_plot
-    df = stability_table("data/outputs", "data/sensitivity", "Perpignan", "ground_mammal")
+    df = stability_table("data/outputs", "_sandbox/sensitivity", "Perpignan", "ground_mammal")
     tornado_plot(df, "connected_habitat_pct", "tornado.png")
 """
 from __future__ import annotations
@@ -84,10 +84,10 @@ def compare_pair(baseline_dir: str, perturbed_dir: str, city: str, guild: str,
 def stability_table(baseline_dir: str, sensitivity_root: str, city: str, guild: str) -> pd.DataFrame:
     """One row per perturbation tag found under sensitivity_root, compared to the baseline."""
     tags = sorted(d for d in os.listdir(sensitivity_root)
-                  if os.path.isdir(os.path.join(sensitivity_root, d, "data", "outputs", city, guild)))
+                  if os.path.isdir(os.path.join(sensitivity_root, d, city, guild)))
     rows = []
     for tag in tags:
-        r = compare_pair(baseline_dir, os.path.join(sensitivity_root, tag, "data", "outputs"), city, guild)
+        r = compare_pair(baseline_dir, os.path.join(sensitivity_root, tag), city, guild)
         r = {"perturbation": tag, **r}
         rows.append(r)
     return pd.DataFrame(rows)
@@ -208,7 +208,7 @@ def response_curve(baseline_dir: str, sensitivity_root: str, city: str, guild: s
         m = re.match(rf"{prefix}_(\d+)$", d)
         if not m:
             continue
-        s = _stats(os.path.join(sensitivity_root, d, "data", "outputs"), city, guild)
+        s = _stats(os.path.join(sensitivity_root, d), city, guild)
         if s is not None:
             pts.append((int(m.group(1)) / 100.0, s))
     sb = _stats(baseline_dir, city, guild)

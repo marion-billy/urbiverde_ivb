@@ -119,7 +119,7 @@ Puis, en annexe A, remplacer « Ces versions sont fixées pour garantir la repro
 formulation exacte : « Les versions de l'environnement d'exécution sont relevées et figées dans
 `env/requirements-lock.txt`. »
 
-- [ ] `env/requirements-lock.txt` produit et commité
+- [x] `env/requirements-lock.txt` produit le 2026-08-30 (395 paquets) ; versions de l'annexe A vérifiées conformes
 - [x] phrase de l'annexe A corrigée (appliquée le 2026-08-29)
 
 ## 3. Test de déterminisme
@@ -217,8 +217,8 @@ sorties.  **Coût** : ~25 lignes dans `utils/sp_pipeline.py`, à insérer juste 
 
 **Attention** : l'horodatage du manifeste cassera l'identité octet par octet du test §3. Une fois le manifeste en place, la comparaison devra l'exclure (`diff -r -x 'manifest_*.json'`).
 
-- [ ] manifeste ajouté et vérifié sur un couple
-- [ ] README des sorties mis à jour
+- [x] manifeste vérifié sur Perpignan / reptile le 2026-08-30 (commit, versions et paramètres complets)
+- [x] README des sorties mis à jour, EN et FR (manifeste documenté, 13 -> 14 fichiers)
 
 ## 5. Étendre les tests
 
@@ -235,8 +235,8 @@ python3 -m pytest tests/ -q            # ou : python3 tests/test_pipeline_extra.
 > de rédaction). **Les lancer une fois et corriger ce qui casse avant de les citer dans le rapport.**
 > Mettre ensuite à jour le tableau attendu/observé du README racine.
 
-- [ ] suite exécutée, 10/10 au vert
-- [ ] tableau du README complété
+- [x] suite exécutée le 2026-08-30 : 12 / 12 au vert
+- [x] tableau du README racine complété (12 tests, attendu et état)
 
 ## 6. Provenance des données
 
@@ -267,8 +267,8 @@ OSM n'a pas de version citable : l'instantané effectivement utilisé est celui 
 refaire un téléchargement via l'interface GBIF, qui en attribue un.
 
 - [x] tableau rempli le 2026-08-30 (dates relevées sur les fichiers produits)
-- [ ] repris en annexe A du rapport
-- [ ] décider si le `lc_cache` des quatre territoires manquants est constitué (état courant du réseau, pas celui de juillet)
+- [x] dates de provenance reprises en annexe A du rapport
+- [x] `lc_cache` constitué pour les six territoires le 2026-08-30, après correction de trois défauts (cf. `decision_log.md`)
 
 ## 7. Après le dépôt : industrialisation
 

@@ -135,7 +135,7 @@ def main() -> None:
     ap.add_argument("--d0-scale", type=float, default=None,
                     help="sensitivity: multiply each ecoprofil dispersal distance d0 by this factor.")
     ap.add_argument("--out-tag", default=None,
-                    help="sensitivity: write baseline-style outputs under data/sensitivity/<out-tag>/<City>/ "
+                    help="sensitivity: write baseline-style outputs under _sandbox/sensitivity/<out-tag>/<City>/ "
                          "instead of data/outputs/ (keeps the reference run intact).")
     ap.add_argument("--lc-cache", action="store_true",
                     help="reuse a cached land cover per (city, buffer) instead of re-fetching Earth "
@@ -193,7 +193,7 @@ def main() -> None:
         if args.out_tag:
             # Mirror the scenario layout so sp_pipeline's parents[2] root-derivation lands on the
             # tag dir (it expects <root>/data/outputs/<city>); otherwise it writes to data/data/outputs.
-            OUTPUT_DIR = os.path.join(PROJECT_ROOT, "data", "sensitivity", args.out_tag, "data", "outputs", city)
+            OUTPUT_DIR = os.path.join(PROJECT_ROOT, "_sandbox", "sensitivity", args.out_tag, city)
             mode = f"sensitivity[{args.out_tag}] -> {OUTPUT_DIR}"
         else:
             OUTPUT_DIR = str(CorridorPaths(city).city_dir)

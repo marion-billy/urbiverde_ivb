@@ -14,7 +14,7 @@ Pour chaque ville, le paysage est modélisé comme un graphe de taches d'habitat
 outputs/<Ville>/<profil>/<artefact>_<profil>_<Ville>.<ext>
 ```
 
-Un dossier `<profil>/` par couple (ville, profil écologique), avec les fichiers décrits en section 4 (jusqu'à 13).
+Un dossier `<profil>/` par couple (ville, profil écologique), avec les fichiers décrits en section 4 (jusqu'à 14).
 
 > **Scénarios d'aménagement.** Un scénario teste l'effet d'un projet : on fournit un polygone de projet (zone à végétaliser, piétonniser, etc.), la chaîne le brûle dans l'occupation du sol, puis recalcule toute la connectivité. Sur l'emprise du polygone, la classe dessinée écrase toutes les couches (WorldCover remplacé, infrastructure OSM découpée à l'intérieur), si bien qu'une avenue végétalisée devient entièrement de l'habitat, et non une route bordée de verdure. Les sorties ont la même structure que les sorties de base, mais dans `data/scenarios/<Ville>/<slug-du-projet>/<profil>/`, produites par `run_pipeline.py --project`.
 
@@ -79,7 +79,7 @@ Dans la surface de friction, chaque code correspond à un coût de déplacement 
 
 ## 4. Fichiers par (ville, profil écologique)
 
-Jusqu'à 13 fichiers par dossier de profil : 5 rasters (`.tif`) + 7 couches vectorielles (`.geojson`) + 1 table (`.csv`). Certaines couches sont optionnelles : `failed_links_*.geojson` et `rupture_points_*.geojson` sont absents quand le profil n'a aucun lien en échec, et `isolated_nodes_*.geojson` quand il n'a aucune tache isolée ; un dossier peut donc en contenir moins.
+Jusqu'à 12 fichiers par dossier de profil : 5 rasters (`.tif`) + 5 couches vectorielles (`.geojson`) + 1 table (`.csv`) + 1 manifeste (`.json`). `failed_links_*.geojson` est optionnel (absent quand le profil n'a aucun lien en échec) ; un dossier peut donc en contenir moins.
 
 ### Rasters (GeoTIFF, 10 m, UTM)
 
@@ -140,9 +140,7 @@ Jusqu'à 13 fichiers par dossier de profil : 5 rasters (`.tif`) + 7 couches vect
 | obstacle | code(s) d'occupation du sol de l'obstacle bloquant, séparés par des virgules (par ex. 52 = route principale, 80 = eau). L'eau (80) est reportée pour les profils où elle est un obstacle (ground_mammal, ground_reptile) ; les bâtiments (51) sont exclus (surfaciques, pas un point de franchissement). |
 | n_ruptures | nombre de franchissements d'obstacle détectés sur le lien. |
 
-**`rupture_points_*.geojson`** : points où un lien `blocked` traverse son obstacle (le franchissement de moindre coût réaliste). Champs : `id`, `wc_code` (classe d'occupation du sol de l'obstacle), `node_1`, `node_2` (les taches que le lien bloqué relierait).
 
-**`isolated_nodes_*.geojson`** : taches d'habitat **sans** aucun corridor fonctionnel (mêmes champs que `nodes`, sans `nbc_score`). Seules les taches entièrement dans la ville y sont signalées.
 
 **`corridor_segments_*.geojson`** : corridors découpés en segments uniques, en gardant les parties situées **hors** des taches d'habitat (les portions de corridor dans la matrice, agrégées par nombre de corridors se superposant), lignes. Purement géométrique (découpé + agrégé), ce n'est pas une prescription d'aménagement.
 
@@ -174,19 +172,20 @@ Jusqu'à 13 fichiers par dossier de profil : 5 rasters (`.tif`) + 7 couches vect
 | connectivity_loss_pct | (pc_theory - pc_real) / pc_theory * 100. **N'est plus considéré comme pertinent** : une perte en % d'un indice abstrait ne parle pas à un aménageur. Conservé dans les sorties mais à ignorer ; préférer ec_*_ha / connected_habitat_pct. |
 | median_tortuosity, mean_tortuosity | sinuosité des corridors (réel/théorique). |
 
+### `manifest_*.json` - provenance du jeu de sorties
+
+Écrit à la fin de chaque exécution. Consigne ce qui a produit le dossier, de sorte qu'un jeu soit traçable sans journal externe : horodatage, territoire et profil écologique, projection, empreinte du commit et état propre ou non de l'arborescence, version de Python et de la plateforme, versions des dix bibliothèques principales, et l'ensemble des paramètres du calcul (`d0`, tampon, codes d'habitat, table de friction complète, budget de déplacement, seuils de cœur, d'îlot et de sous-réseau).
+
+> Le fichier porte un horodatage : l'exclure de tout contrôle de reproductibilité octet par octet (`diff -r -x 'manifest_*.json'`).
+
 > **Lire ces indices en relatif.** Le PC (Probability of Connectivity) est un indice de paysage **relatif**, non borné à [0,1] (la normalisation par la seule AOI peut dépasser 1) : sa valeur absolue n'a pas de sens en soi, il sert à **comparer** (profils, villes, avant/après un scénario). `ec_real_ha` (surface connectée équivalente, une construction de modélisation, pas une tache réelle) et `connected_habitat_pct` (= EC / habitat dans l'AOI) en héritent et dépendent de l'AOI : à lire eux aussi relativement. `connectivity_loss_pct` n'est plus considéré comme pertinent (conservé dans les sorties, mais à ignorer).
 
 ---
 
 ## 5. Méthodologie
 
-Par (ville, profil écologique) : construire l'occupation du sol du profil (WorldCover + OSM) -> extraire les taches d'habitat par analyse morphologique (MSPA : noyaux d'au moins 1 ha de cœur, relais 0,1-1 ha) -> relier les taches par un **graphe de Gabriel** (liens dans `2 * d0`) -> calculer la Probability of Connectivity théorique -> router chaque lien en **chemin de moindre coût** sur la surface de friction (`skimage.MCP_Geometric`) dans un budget de coût `d0 * 3`. Les liens réussis sont exportés en `lcp` ; ceux sans chemin fini ou au-delà du budget deviennent `failed_links` (fail_reason : blocked / out_of_reach / node_not_found), et chaque franchissement bloqué est exporté en `rupture_points`. Une surface de dispersion bornée (`dispersal_bounded`) est masquée au même budget. Enfin la chaîne calcule les métriques réseau/corridor, découpe les corridors en `corridor_segments`, et écrit les KPI par profil dans `stats.csv`.
+Par (ville, profil écologique) : construire l'occupation du sol du profil (WorldCover + OSM) -> extraire les taches d'habitat par analyse morphologique (MSPA : noyaux d'au moins 1 ha de cœur, relais 0,1-1 ha) -> relier les taches par un **graphe de Gabriel** (liens dans `2 * d0`) -> calculer la Probability of Connectivity théorique -> router chaque lien en **chemin de moindre coût** sur la surface de friction (`skimage.MCP_Geometric`) dans un budget de coût `d0 * 3`. Les liens réussis sont exportés en `lcp` ; ceux sans chemin fini ou au-delà du budget deviennent `failed_links` (fail_reason : blocked / out_of_reach / node_not_found). Une surface de dispersion bornée (`dispersal_bounded`) est masquée au même budget. Enfin la chaîne calcule les métriques réseau/corridor, découpe les corridors en `corridor_segments`, et écrit les KPI par profil dans `stats.csv`.
 
-### Schéma de la chaîne
-
-![Schéma de la chaîne](pipeline.png)
-
-Légende des couleurs : or = entrées, gris = fonctions (étapes de la chaîne), vert = couches raster (`.tif`), bleu = couches vectorielles (`.geojson`), rouge = la table `stats.csv`. Chaque boîte de couche indique son nom de fichier (gras) et son contenu/champs (italique). La configuration et le téléchargement de l'occupation du sol tournent une fois par ville ; le reste boucle sur les 4 profils écologiques.
 
 ---
 

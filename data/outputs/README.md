@@ -14,7 +14,7 @@ For each city we model the landscape as a graph of habitat patches, connect them
 outputs/<City>/<profile>/<artefact>_<profile>_<City>.<ext>
 ```
 
-One `<profile>/` folder per (city, ecological profile), with the files described in section 4 (up to 13).
+One `<profile>/` folder per (city, ecological profile), with the files described in section 4 (up to 14).
 
 > **Planning scenarios.** A scenario tests a project's effect: you supply a project polygon (the area to vegetalize, pedestrianize, etc.), the chain burns it into the land cover, then recomputes all the connectivity. On the footprint, the drawn class overrides every layer (WorldCover replaced, OSM infrastructure clipped out inside), so a vegetalized avenue fully becomes habitat, not a road lined with greenery. Outputs have the same structure as the baseline ones, but under `data/scenarios/<City>/<project-slug>/<profile>/`, produced by `run_pipeline.py --project`.
 
@@ -79,10 +79,9 @@ In the friction surface each code maps to a movement cost; some are **impassable
 
 ## 4\. Files per (city, ecological profile)
 
-Up to 13 files per ecological profile folder: 5 rasters (`.tif`) + 7 vector layers (`.geojson`) + 1 table
-(`.csv`). Some vector layers are optional: `failed_links_*.geojson` and `rupture_points_*.geojson` are absent
-when the profile has no failed link, and `isolated_nodes_*.geojson` when it has 0 isolated patches, so a
-folder may hold fewer.
+Up to 12 files per ecological profile folder: 5 rasters (`.tif`) + 5 vector layers (`.geojson`) + 1 table
+(`.csv`) + 1 manifest (`.json`). `failed_links_*.geojson` is optional (absent when the profile has no failed
+link), so a folder may hold fewer.
 
 ### Rasters (GeoTIFF, 10 m, UTM)
 
@@ -143,9 +142,7 @@ folder may hold fewer.
 | obstacle                                                  | land-cover code(s) of the blocking feature(s), comma-joined (e.g. 52 = major road, 80 = water). Water (80) is reported for the ecological profiles where it is a barrier (ground_mammal, ground_reptile); buildings (51) are excluded (areal, not a crossing point).                                                                 |
 | n_ruptures                                                | number of obstacle crossings detected on the link.                                                                                                              |
 
-**`rupture_points_*.geojson`** - points where a `blocked` link crosses its obstacle (the realistic least-cost crossing). Fields: `id`, `wc_code` (obstacle land-cover class), `node_1`, `node_2` (the patches the blocked link would connect).
 
-**`isolated_nodes_*.geojson`** - habitat patches with **no** working corridor (same fields as `nodes`, without `nbc_score`). Only patches fully inside the city are flagged here.
 
 **`corridor_segments_*.geojson`** - corridors cut into unique segments, keeping the parts that lie **outside** habitat patches (the corridor portions in the matrix, aggregated by how many corridors overlap), lines. Purely geometric (clipped + aggregated), not a planning prescription.
 
@@ -177,19 +174,20 @@ folder may hold fewer.
 | connectivity_loss_pct              | (pc_theory - pc_real) / pc_theory * 100. **No longer considered relevant**: a % loss of an abstract index means little to planners. Kept in the outputs but to be ignored; prefer ec_*_ha / connected_habitat_pct. |
 | median_tortuosity, mean_tortuosity | corridor winding (real/theoretical).                                                             |
 
+### `manifest_*.json` - provenance of this output set
+
+Written at the end of each run. Records what produced the folder, so a set can be traced back without an external log: generation timestamp, city and ecological profile, CRS, git commit and whether the working tree was clean, Python and platform, the versions of the ten main libraries, and every parameter of the computation (`d0`, AOI buffer, habitat codes, the full friction table, cost budget, core and islet thresholds, sub-network threshold).
+
+> The file carries a timestamp, so exclude it from any byte-for-byte reproducibility check: `diff -r -x 'manifest_*.json'`.
+
 > **Read these indices relatively.** PC (Probability of Connectivity) is a **relative** landscape index, not bounded to \[0,1\] (normalisation by the strict AOI can exceed 1): its absolute value is meaningless on its own, it is for **comparison** (profiles, cities, before/after a scenario). `ec_real_ha` (equivalent connected area, a modelling construct, not a real patch) and `connected_habitat_pct` (= EC / in-AOI habitat) inherit this and depend on the AOI: read them relatively too. `connectivity_loss_pct` is no longer considered relevant.
 
 ---
 
 ## 5\. Methodology
 
-Per (city, ecological profile): build the ecological profile land cover (WorldCover + OSM) → extract habitat patches by morphological analysis (MSPA: cores ≥ 1 ha core area, stepping stones 0.1-1 ha) → connect patches with a **Gabriel graph** (links within `2 * d0`) → compute the theoretical Probability of Connectivity → route each link as a **least-cost path** over the friction surface (`skimage.MCP_Geometric`) within a cost budget `d0 * 3`. Successful links are exported as `lcp`; links with no finite path or beyond the budget become `failed_links` (fail_reason: blocked / out_of_reach / node_not_found), and each blocked crossing is exported as `rupture_points`. A bounded dispersal surface (`dispersal_bounded`) is masked at the same budget. Finally the chain computes network/corridor metrics, cuts corridors into `corridor_segments`, and writes per-profile KPIs to `stats.csv`.
+Per (city, ecological profile): build the ecological profile land cover (WorldCover + OSM) → extract habitat patches by morphological analysis (MSPA: cores ≥ 1 ha core area, stepping stones 0.1-1 ha) → connect patches with a **Gabriel graph** (links within `2 * d0`) → compute the theoretical Probability of Connectivity → route each link as a **least-cost path** over the friction surface (`skimage.MCP_Geometric`) within a cost budget `d0 * 3`. Successful links are exported as `lcp`; links with no finite path or beyond the budget become `failed_links` (fail_reason: blocked / out_of_reach / node_not_found). A bounded dispersal surface (`dispersal_bounded`) is masked at the same budget. Finally the chain computes network/corridor metrics, cuts corridors into `corridor_segments`, and writes per-profile KPIs to `stats.csv`.
 
-### Pipeline diagram
-
-![Pipeline diagram](pipeline.png)
-
-Colour key: gold = inputs, grey = functions (pipeline steps), green = raster layers (`.tif`), blue = vector layers (`.geojson`), red = the `stats.csv` table. Each layer box shows its file name (bold) and its content/fields (italic). Setup and the land-cover download run once per city; everything else loops over the 4 ecological profiles.
 
 ---
 
