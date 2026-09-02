@@ -23,7 +23,6 @@ data/*
 !data/outputs/
 data/outputs/*
 !data/outputs/README.md
-!data/outputs/README_FR.md
 !data/outputs/species_params.csv
 !data/sensitivity/
 data/sensitivity/*
