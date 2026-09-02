@@ -131,7 +131,7 @@ link), so a folder may hold fewer.
 | tortuosity                                                    | real_dist / theoretical_dist (1 = straight; higher = more winding). |
 | dPC_val, dPC_relative, ebc_score, category, pinch_point_score | corridor-importance metrics. Currently disabled → null.             |
 
-**`failed_links_*.geojson`** - the **failed** links (a corridor was wanted but could not be realised). Both `blocked` and `out_of_reach` links are traced along their real least-cost route: `blocked` up to the softened obstacle (where the rupture point is placed), `out_of_reach` a full route whose cost exceeds the dispersal budget `d0 * 3`. Only `node_not_found` (rare, technical) keeps the straight desire line. The dashboard shows only `blocked`.
+**`failed_links_*.geojson`** - the **failed** links (a corridor was wanted but could not be realised). Both `blocked` and `out_of_reach` links are traced along their real least-cost route: `blocked` up to the softened obstacle (where the rupture point is placed), `out_of_reach` a full route whose cost exceeds the dispersal budget `d0 * 3`. Only `node_not_found` (rare, technical) keeps the straight desire line. The dashboard no longer shows failed links; they are kept here for analysis.
 
 | field                                                     | meaning                                                                                                                                                         |
 |---------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -203,18 +203,16 @@ Per (city, ecological profile): build the ecological profile land cover (WorldCo
 
 ## 7\. Caveats
 
-- **The dashboard renders only `blocked` failed links; this folder keeps all of them.** `out_of_reach` links are the majority and would clutter the map, so the dashboard filters them out; they remain here (in `failed_links_*.geojson`) for analysis.
-
-- Metrics **disabled in this batch** (columns present but null/0): node betweenness (`nbc_score`), corridor importance (`dPC_*`, `ebc_score`, `category`, `pinch_point_score`, segment `sum_dPC`/ `max_ebc`/`max_pinch_point`). They were switched off for compute cost; the geometry and basic metrics (distances, tortuosity, PC, counts) are valid.
-
-- Sub-network fields (`subnetwork_id`, `n_subnetworks`, `n_subnetworks_theory`, `subnetworks_split_by_failed_links`, `largest_subnetwork_size`) are present in **all current outputs**. A sub-network is a connected component of the realized (post-barrier) network with **>=3 patches inside the AOI**; connectivity may pass through kept out-of-AOI patches, but only in-AOI patches are counted (so `largest_subnetwork_size <= nb_nodes`).
-
-- Segment smoothing is approximate (see note above).
+**Methodological and ecological limitations**
 
 - Source: ESA WorldCover v200 + OSM (snapshot at run time, June 2026). Friction calibrated on Cerema Sud-Ouest (2025, La Rochelle) references, no empirical validation.
-
 - **Habitat patches are qualified structurally, not ecologically.** Cores vs stepping stones (`node_type`, `class`, `max_core_ha`) come from patch size and compactness only (MSPA morphology), not from habitat quality: diffuse pressures (light and noise pollution, disturbance, management, domestic predators) are not captured, so a large compact core can overlie degraded habitat. A multicriteria quality qualification was planned but reduced to the morphological criterion for this batch.
+- Movements inside habitat patches are considered free, which can overestimate connectivity.
+- Resolution can be too coarse for urban environments; iterate with Green Urban Sat or a more detailed land cover?
 
-- Movements inside habitats patches considered as free, can overestimate connectivity.
+**Notes on this data batch and the dashboard**
 
-- Resolution can be too coarse for urban environments, iterations with Green Urban Sat or more detailed landcover ?
+- **Failed links are no longer shown on the dashboard**; this folder keeps all of them (in `failed_links_*.geojson`) for analysis.
+- Metrics **disabled in this batch** (columns present but null/0): node betweenness (`nbc_score`), corridor importance (`dPC_*`, `ebc_score`, `category`, `pinch_point_score`, segment `sum_dPC`/ `max_ebc`/`max_pinch_point`). They were switched off for compute cost; the geometry and basic metrics (distances, tortuosity, PC, counts) are valid.
+- Sub-network fields (`subnetwork_id`, `n_subnetworks`, `n_subnetworks_theory`, `subnetworks_split_by_failed_links`, `largest_subnetwork_size`) are present in **all current outputs**. A sub-network is a connected component of the realized (post-barrier) network with **>=3 patches inside the AOI**; connectivity may pass through kept out-of-AOI patches, but only in-AOI patches are counted (so `largest_subnetwork_size <= nb_nodes`).
+- Segment smoothing is approximate (see note above).

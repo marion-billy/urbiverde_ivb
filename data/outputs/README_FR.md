@@ -129,7 +129,7 @@ Jusqu'à 12 fichiers par dossier de profil : 5 rasters (`.tif`) + 5 couches vect
 | tortuosity | real_dist / theoretical_dist (1 = droit ; plus haut = plus sinueux). |
 | dPC_val, dPC_relative, ebc_score, category, pinch_point_score | métriques d'importance de corridor. Actuellement désactivées -> null. |
 
-**`failed_links_*.geojson`** : les liens **en échec** (un corridor était voulu mais n'a pu être réalisé). Les liens `blocked` et `out_of_reach` sont **tous deux tracés** le long de leur vrai chemin de moindre coût : `blocked` jusqu'à l'obstacle adouci (où est placé le point de rupture), `out_of_reach` un tracé complet dont le coût dépasse le budget de dispersion `d0 * 3`. Seul `node_not_found` (rare, technique) garde la ligne de désir droite. Le tableau de bord n'affiche que les `blocked`.
+**`failed_links_*.geojson`** : les liens **en échec** (un corridor était voulu mais n'a pu être réalisé). Les liens `blocked` et `out_of_reach` sont **tous deux tracés** le long de leur vrai chemin de moindre coût : `blocked` jusqu'à l'obstacle adouci (où est placé le point de rupture), `out_of_reach` un tracé complet dont le coût dépasse le budget de dispersion `d0 * 3`. Seul `node_not_found` (rare, technique) garde la ligne de désir droite. Le tableau de bord n'affiche plus les liens en échec ; ils restent ici pour l'analyse.
 
 | champ | signification |
 |---|---|
@@ -199,18 +199,16 @@ Par (ville, profil écologique) : construire l'occupation du sol du profil (Worl
 
 ## 7. Précautions
 
-- **Le tableau de bord n'affiche que les liens en échec `blocked` ; ce dossier les conserve tous.** Les `out_of_reach` sont majoritaires et encombreraient la carte, le tableau de bord les filtre ; ils restent ici (dans `failed_links_*.geojson`) pour l'analyse.
-
-- Métriques **désactivées dans ce lot** (colonnes présentes mais null/0) : intermédiarité de nœud (`nbc_score`), importance de corridor (`dPC_*`, `ebc_score`, `category`, `pinch_point_score`, `sum_dPC` / `max_ebc` / `max_pinch_point` des segments). Désactivées pour le coût de calcul ; la géométrie et les métriques de base (distances, sinuosité, PC, comptages) sont valides.
-
-- Les champs de sous-réseaux (`subnetwork_id`, `n_subnetworks`, `n_subnetworks_theory`, `subnetworks_split_by_failed_links`, `largest_subnetwork_size`) sont présents dans **toutes les sorties actuelles**. Un sous-réseau est une composante connexe du réseau réalisé (post-obstacles) d'**au moins 3 taches dans l'AOI** ; la connectivité peut passer par des taches hors AOI conservées, mais seules les taches dans l'AOI sont comptées (donc `largest_subnetwork_size <= nb_nodes`).
-
-- Le lissage des segments est approximatif (voir note plus haut).
+**Limites méthodologiques et écologiques**
 
 - Source : ESA WorldCover v200 + OSM (instantané au moment du run, juin 2026). Friction calibrée sur les références Cerema Sud-Ouest (2025, La Rochelle), sans validation empirique.
-
 - **Les taches d'habitat sont qualifiées structurellement, pas écologiquement.** Noyaux vs relais (`node_type`, `class`, `max_core_ha`) proviennent seulement de la taille et de la compacité des taches (morphologie MSPA), pas de la qualité de l'habitat : les pressions diffuses (pollution lumineuse et sonore, dérangement, gestion, prédateurs domestiques) ne sont pas captées, si bien qu'un grand noyau compact peut recouvrir un habitat dégradé. Une qualification multicritère de qualité était prévue mais réduite au critère morphologique pour ce lot.
-
 - Les déplacements à l'intérieur des taches d'habitat sont considérés comme libres, ce qui peut surestimer la connectivité.
-
 - La résolution peut être trop grossière pour les milieux urbains ; itérer avec Green Urban Sat ou une occupation du sol plus détaillée ?
+
+**Notes sur ce lot de données et le tableau de bord**
+
+- **Les liens en échec ne sont plus affichés sur le tableau de bord** ; ce dossier les conserve tous (dans `failed_links_*.geojson`) pour l'analyse.
+- Métriques **désactivées dans ce lot** (colonnes présentes mais null/0) : intermédiarité de nœud (`nbc_score`), importance de corridor (`dPC_*`, `ebc_score`, `category`, `pinch_point_score`, `sum_dPC` / `max_ebc` / `max_pinch_point` des segments). Désactivées pour le coût de calcul ; la géométrie et les métriques de base (distances, sinuosité, PC, comptages) sont valides.
+- Les champs de sous-réseaux (`subnetwork_id`, `n_subnetworks`, `n_subnetworks_theory`, `subnetworks_split_by_failed_links`, `largest_subnetwork_size`) sont présents dans **toutes les sorties actuelles**. Un sous-réseau est une composante connexe du réseau réalisé (post-obstacles) d'**au moins 3 taches dans l'AOI** ; la connectivité peut passer par des taches hors AOI conservées, mais seules les taches dans l'AOI sont comptées (donc `largest_subnetwork_size <= nb_nodes`).
+- Le lissage des segments est approximatif (voir note plus haut).
