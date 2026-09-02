@@ -46,12 +46,11 @@ import sp_pipeline  # noqa: E402
 import species_params as spp  # noqa: E402
 from paths import CorridorPaths  # noqa: E402
 
-# EarthEngine service-account auth. The key path comes from $GEE_KEY_PATH (fallback to the shared
-# key file); the service-account email is read FROM the key file, so no credential value is
-# hard-coded here. ee.Initialize(project=...) ADC is not configured in this environment, so a
-# service-account key is still required.
-CREDENTIALS_PATH = os.environ.get(
-    "GEE_KEY_PATH", "/home/jovyan/work/team/marion/credentials/gee161025-533af22f806b.json")
+# EarthEngine service-account auth. The key path is read from the $GEE_KEY_PATH environment
+# variable (no path hard-coded here); the service-account email is read FROM the key file, so no
+# credential value is hard-coded either. ee.Initialize(project=...) ADC is not configured in this
+# environment, so a service-account key is still required: set GEE_KEY_PATH before running.
+CREDENTIALS_PATH = os.environ["GEE_KEY_PATH"]
 
 # AOI source per city: ("url", <geojson url>) | ("boundary", <name>) | ("bbox", (minx,miny,maxx,maxy))
 CITY_CONFIG = {
