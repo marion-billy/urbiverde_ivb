@@ -93,3 +93,27 @@ de traitement.
 | Calibration : habitat | les 4 profils écologiques | tout code d'habitat a une friction ≤ 3 et n'est jamais une barrière |
 | Calibration : barrières | les 4 profils écologiques | {51, 80} ; {51} ; aucune ; {51, 80} |
 | Calibration : dispersion | les 4 profils écologiques | d₀ de 3000, 2000, 1500 et 750 m ; budget = 3 × d₀ |
+
+## 7. Organisation du code (`utils/`)
+
+Cœur de la chaîne :
+
+| Fichier | Rôle |
+|---|---|
+| `run_pipeline.py` | Point d'entrée en ligne de commande ; lance la chaîne pour une ville (modes baseline, sensibilité, scénario). |
+| `sp_pipeline.py` | Orchestration d'un couple (ville, profil) : enchaîne occupation du sol -> habitat -> graphe -> LCP -> indicateurs -> sorties. |
+| `landcover.py` | Acquisition et construction de l'occupation du sol enrichie (WorldCover via Earth Engine + OpenStreetMap). |
+| `species_params.py` | Profils écologiques : `d0`, tables de friction, codes d'habitat et de barrière par profil. |
+| `connectivity.py` | Taches d'habitat (segmentation morphologique MSPA), graphe de Gabriel, indicateurs de connectivité. |
+| `routing.py` | Surface de friction, chemins de moindre coût (`MCP_Geometric`), surfaces de dispersion. |
+| `paths.py` | Gestion centralisée des chemins de sortie (`CorridorPaths`). |
+
+Utilitaires :
+
+| Fichier | Rôle |
+|---|---|
+| `output_check.py` | Contrôle automatique des sorties produites. |
+| `sensitivity_metrics.py` | Métriques de l'analyse de sensibilité. |
+| `gbif_validation.py` | Validation externe côté habitat (occurrences GBIF). |
+| `prep_for_dashboard.py` | Conversion des sorties en couches pour le tableau de bord. |
+| `vizu_ind.py` | Fonctions de visualisation (utilisées par les notebooks d'orchestration). |
