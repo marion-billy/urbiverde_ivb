@@ -1,10 +1,10 @@
-"""Automated output check for the corridor pipeline (report section 2.6).
+"""Automated output check for the corridor pipeline.
 
 For one (city, ecoprofil) output directory, verifies: the stats file is present with its headline
 indicators finite ; the core vector layers (nodes, corridors) exist, are non-empty and carry a
 PROJECTED CRS (UTM, not lon/lat) ; the friction raster's finite values stay in the plausible
 1..100 range (barriers are +inf, excluded) ; and the bounded dispersal cost never exceeds the
-movement budget 3 x d0 (report eq. 3). Returns (ok, problems).
+movement budget 3 x d0. Returns (ok, problems).
 
 Run as a module to check every set under data/outputs :
     PYTHONPATH=/opt/conda/lib/python3.11/site-packages python3 utils/output_check.py [outputs_dir]
@@ -58,7 +58,7 @@ def check_output_dir(d: str) -> tuple[bool, list[str]]:
         if finite.size and (finite.min() < 1 or finite.max() > 100):
             problems.append(f"friction hors [1, 100] (min {finite.min():g}, max {finite.max():g})")
 
-    # 4. dispersal cost bounded by the movement budget (3 x d0 ; report eq. (3))
+    # 4. dispersal cost bounded by the movement budget (3 x d0)
     df = glob.glob(os.path.join(d, "dispersal_bounded_*.tif"))
     if df:
         try:
