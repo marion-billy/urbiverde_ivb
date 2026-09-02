@@ -2,10 +2,9 @@
 # corridor_project - .gitignore
 # Principe : le depot porte le CODE, la CONFIGURATION et la DOCUMENTATION
 # (~2 Mo). Les donnees produites (data/ = 116 Go) et les caches sont diffuses
-# separement (archive / stockage objet), pas versionnes.
+# separement (archive / stockage objet).
 # =============================================================================
 
-# --- Secrets : jamais dans le depot ------------------------------------------
 # La cle de compte de service Earth Engine est lue via $GEE_KEY_PATH.
 credentials/
 *credential*.json
@@ -15,10 +14,7 @@ gee*.json
 *.key
 .env
 
-# --- Donnees et caches (volumineux, regenerables) ----------------------------
-# Git n'applique pas les negations sous un dossier exclu en bloc : on exclut le CONTENU
-# (data/*) puis on reouvre selectivement la documentation et les tableaux de synthese,
-# qui sont du livrable et pesent quelques kilo-octets.
+# --- Donnees et caches ----------------------------
 data/*
 !data/outputs/
 data/outputs/*
@@ -51,21 +47,6 @@ __pycache__/
 .ipynb_checkpoints/
 .venv/
 venv/
-
-# --- Notebooks : versionner le code, pas les sorties -------------------------
-# Passer nbstripout avant commit (voir suivi/reproductibilite.md).
-# Les checkpoints Jupyter sont deja exclus ci-dessus.
-
-# --- Rapport : sources versionnees, binaires lourds exclus ------------------
-papier/**/*.docx
-papier/**/*.pptx
-papier/**/*.xlsx
-papier/**/*.zip
-papier/litterature/*.pdf
-papier/internship_report/rapport_complet.pdf
-papier/internship_report/_tectonic.log
-papier/internship_report/*.bak
-papier/internship_report/*.bak2
 
 # --- Divers ------------------------------------------------------------------
 .nfs*
